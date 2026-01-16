@@ -38,9 +38,9 @@ class RecommendationType(str, Enum):
 
 # Initialize FastMCP server
 yfinance_server = FastMCP(
-    "yfinance",
+    "superfinance",
     instructions="""
-# Yahoo Finance MCP Server
+# SuperFinance MCP Server
 
 This server is used to get information about a given ticker symbol from yahoo finance.
 
@@ -512,7 +512,7 @@ if __name__ == "__main__":
     if os.getenv("FLY_APP_NAME") or os.getenv("PORT"):
         # Remote deployment - use HTTP
         port = int(os.getenv("PORT", "8080"))
-        print(f"Starting Yahoo Finance MCP server on HTTP at 0.0.0.0:{port}")
+        print(f"Starting SuperFinance MCP server on HTTP at 0.0.0.0:{port}")
         
         # Create the MCP app
         app = yfinance_server.http_app()
@@ -533,5 +533,5 @@ if __name__ == "__main__":
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         # Local development - use stdio
-        print("Starting Yahoo Finance MCP server with stdio transport")
+        print("Starting SuperFinance MCP server with stdio transport")
         yfinance_server.run()
