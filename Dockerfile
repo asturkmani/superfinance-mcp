@@ -1,41 +1,29 @@
-# Use a Python image with uv pre-installed
-FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS uv
+# Multi-stage build for Yahoo Finance MCP server
+FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS builder
 
-# Install the project into /app
 WORKDIR /app
 
-# Enable bytecode compilation
-ENV UV_COMPILE_BYTECODE=1
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
 
-# Copy from the cache instead of linking since it's a mounted volume
-ENV UV_LINK_MODE=copy
+# Install dependencies
+RUN uv pip install --system -e .
 
-# Copy project files
-COPY pyproject.toml .
-
-# Install the project's dependencies using uv
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system -e .
-
-# Copy the rest of the application code
-COPY . .
-
-# Second stage: runtime image
+# Stage 2: Runtime
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy the virtual environment from the uv stage
-COPY --from=uv /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=uv /usr/local/bin /usr/local/bin
+# Copy Python packages from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 
 # Copy application code
-COPY . .
+COPY server.py ./
+COPY README.md ./
+COPY pyproject.toml ./
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+# Expose port for SSE
+EXPOSE 8080
 
-# Command to run the MCP server
-CMD ["uv", "run", "server.py"]
+# Run server directly with SSE transport (no wrapper needed)
+CMD ["/usr/local/bin/python3", "server.py", "--transport", "sse", "--host", "0.0.0.0", "--port", "8080"]

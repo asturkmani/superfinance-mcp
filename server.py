@@ -1,5 +1,7 @@
+import argparse
 import json
 from enum import Enum
+from typing import Any
 
 import pandas as pd
 import yfinance as yf
@@ -412,6 +414,30 @@ async def get_recommendations(ticker: str, recommendation_type: str, months_back
 
 
 if __name__ == "__main__":
-    # Initialize and run the server
-    print("Starting Yahoo Finance MCP server...")
-    yfinance_server.run(transport="stdio")
+    parser = argparse.ArgumentParser(description="Yahoo Finance MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default="stdio",
+        help="Transport type (default: stdio for local, use sse for remote)"
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host to bind to for SSE transport (default: 0.0.0.0)"
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Port to bind to for SSE transport (default: 8080)"
+    )
+    
+    args = parser.parse_args()
+    
+    print(f"Starting Yahoo Finance MCP server with {args.transport} transport...")
+    if args.transport == "sse":
+        print(f"Listening on {args.host}:{args.port}")
+        yfinance_server.run(transport="sse", host=args.host, port=args.port)
+    else:
+        yfinance_server.run(transport="stdio")
