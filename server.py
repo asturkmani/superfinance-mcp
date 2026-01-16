@@ -417,27 +417,27 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Yahoo Finance MCP Server")
     parser.add_argument(
         "--transport",
-        choices=["stdio", "sse"],
+        choices=["stdio", "http"],
         default="stdio",
-        help="Transport type (default: stdio for local, use sse for remote)"
+        help="Transport type (default: stdio for local, use http for remote SSE)"
     )
     parser.add_argument(
         "--host",
         default="0.0.0.0",
-        help="Host to bind to for SSE transport (default: 0.0.0.0)"
+        help="Host to bind to for HTTP transport (default: 0.0.0.0)"
     )
     parser.add_argument(
         "--port",
         type=int,
         default=8080,
-        help="Port to bind to for SSE transport (default: 8080)"
+        help="Port to bind to for HTTP transport (default: 8080)"
     )
     
     args = parser.parse_args()
     
     print(f"Starting Yahoo Finance MCP server with {args.transport} transport...")
-    if args.transport == "sse":
+    if args.transport == "http":
         print(f"Listening on {args.host}:{args.port}")
-        yfinance_server.run(transport="sse", host=args.host, port=args.port)
+        yfinance_server.run(transport="http", host=args.host, port=args.port)
     else:
         yfinance_server.run(transport="stdio")

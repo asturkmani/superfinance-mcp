@@ -25,5 +25,5 @@ COPY pyproject.toml ./
 # Expose port for SSE
 EXPOSE 8080
 
-# Run server directly with SSE transport (no wrapper needed)
-CMD ["/usr/local/bin/python3", "server.py", "--transport", "sse", "--host", "0.0.0.0", "--port", "8080"]
+# Run server directly with HTTP transport (provides SSE endpoint)
+CMD ["/usr/local/bin/python3", "server.py", "--transport", "http", "--host", "0.0.0.0", "--port", "8080"]
