@@ -14,13 +14,6 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install flyctl for MCP wrapper
-RUN apt-get update && apt-get install -y curl && \
-    curl -L https://fly.io/install.sh | sh && \
-    rm -rf /var/lib/apt/lists/*
-
-ENV PATH="/root/.fly/bin:${PATH}"
-
 # Copy Python packages from builder
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 
@@ -29,8 +22,8 @@ COPY server.py ./
 COPY README.md ./
 COPY pyproject.toml ./
 
-# Expose port for SSE
+# Expose port
 EXPOSE 8080
 
-# Use flyctl mcp wrap (simple, works, no auth = unlimited clients)
-CMD ["flyctl", "mcp", "wrap", "--", "/usr/local/bin/python3", "server.py"]
+# Run server directly with Python (fastmcp handles HTTP transport)
+CMD ["python", "server.py"]

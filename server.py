@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 import yfinance as yf
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 
 # Define an enum for the type of financial statement
@@ -414,6 +414,17 @@ async def get_recommendations(ticker: str, recommendation_type: str, months_back
 
 
 if __name__ == "__main__":
-    # Run the server with stdio transport (default for local use)
-    # For remote deployment, use: python -m mcp.server.fastmcp run server.py:yfinance_server --transport http --host 0.0.0.0 --port 8080
-    yfinance_server.run()
+    # For local testing, use stdio
+    # For remote deployment, use HTTP transport
+    import os
+    
+    # Check if we're running in Fly.io or remote environment
+    if os.getenv("FLY_APP_NAME") or os.getenv("PORT"):
+        # Remote deployment - use HTTP
+        port = int(os.getenv("PORT", "8080"))
+        print(f"Starting Yahoo Finance MCP server on HTTP at 0.0.0.0:{port}")
+        yfinance_server.run(transport="http", host="0.0.0.0", port=port)
+    else:
+        # Local development - use stdio
+        print("Starting Yahoo Finance MCP server with stdio transport")
+        yfinance_server.run()
