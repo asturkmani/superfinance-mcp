@@ -1069,7 +1069,8 @@ def snaptrade_list_all_holdings(
                                 "live_price": round(live_price * fx_rate, 2) if live_price else None,
                                 "market_value": round(market_value * fx_rate, 2) if market_value else None,
                                 "cost_basis": round(cost_basis * fx_rate, 2) if cost_basis else None,
-                                "unrealized_pnl": round(unrealized_pnl * fx_rate, 2) if unrealized_pnl else None
+                                "unrealized_pnl": round(unrealized_pnl * fx_rate, 2) if unrealized_pnl else None,
+                                "unrealized_pnl_pct": unrealized_pnl_pct  # Same % regardless of currency
                             }
                             if market_value:
                                 account_value_converted += market_value * fx_rate
@@ -1150,7 +1151,8 @@ def snaptrade_list_all_holdings(
                                 "fx_rate": fx_rate,
                                 "market_value": round(market_value * fx_rate, 2) if market_value else None,
                                 "cost_basis": round(cost_basis * fx_rate, 2) if cost_basis else None,
-                                "unrealized_pnl": round(unrealized_pnl * fx_rate, 2) if unrealized_pnl else None
+                                "unrealized_pnl": round(unrealized_pnl * fx_rate, 2) if unrealized_pnl else None,
+                                "unrealized_pnl_pct": unrealized_pnl_pct  # Same % regardless of currency
                             }
                             if market_value:
                                 account_value_converted += market_value * fx_rate
@@ -1195,6 +1197,7 @@ def snaptrade_list_all_holdings(
             result["total_value_converted"] = {
                 target_currency: round(total_value_converted, 2)
             } if total_value_converted else None
+            result["fx_note"] = "Cost basis converted using current FX rate, not historical rate from purchase date"
 
         return json.dumps(result, indent=2)
 
