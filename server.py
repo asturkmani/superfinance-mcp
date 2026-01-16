@@ -531,6 +531,56 @@ def calculate(expression: str) -> str:
         return f"Error executing code: {type(e).__name__}: {str(e)}"
 
 
+@yfinance_server.tool()
+def get_fx_rate(
+    from_currency: str,
+    to_currency: str
+) -> str:
+    """
+    Get the current foreign exchange rate between two currencies.
+
+    Args:
+        from_currency: The source currency code (e.g., "GBP", "EUR", "USD")
+        to_currency: The target currency code (e.g., "USD", "GBP", "EUR")
+
+    Returns:
+        JSON string containing the exchange rate and related information
+
+    Examples:
+        get_fx_rate("GBP", "USD") -> How many USD per 1 GBP
+        get_fx_rate("EUR", "GBP") -> How many GBP per 1 EUR
+    """
+    try:
+        # Yahoo Finance uses format like "GBPUSD=X"
+        ticker_symbol = f"{from_currency.upper()}{to_currency.upper()}=X"
+        ticker = yf.Ticker(ticker_symbol)
+        info = ticker.info
+
+        rate = info.get("regularMarketPrice")
+        if rate is None:
+            return json.dumps({
+                "error": f"Could not get rate for {from_currency}/{to_currency}",
+                "message": "Check that both currency codes are valid"
+            })
+
+        return json.dumps({
+            "success": True,
+            "from": from_currency.upper(),
+            "to": to_currency.upper(),
+            "rate": rate,
+            "bid": info.get("bid"),
+            "ask": info.get("ask"),
+            "day_high": info.get("dayHigh"),
+            "day_low": info.get("dayLow"),
+            "description": f"1 {from_currency.upper()} = {rate} {to_currency.upper()}"
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "error": str(e)
+        }, indent=2)
+
+
 # ============================================================================
 # SnapTrade Tools - Brokerage Account Integration
 # ============================================================================
