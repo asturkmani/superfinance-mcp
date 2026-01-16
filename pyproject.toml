@@ -8,6 +8,7 @@ dependencies = [
     "fastmcp>=2.0.0",
     "yfinance>=0.2.62",
     "uvicorn>=0.30.0",
+    "snaptrade-python-sdk>=11.0.154",
 ]
 
 [project.optional-dependencies]

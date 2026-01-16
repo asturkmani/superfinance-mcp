@@ -1,8 +1,9 @@
 import argparse
 import json
 import math
+import os
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 from io import StringIO
 import sys
 
@@ -10,6 +11,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from fastmcp import FastMCP
+from snaptrade_client import SnapTrade
 
 
 # Define an enum for the type of financial statement
@@ -56,6 +58,25 @@ Available tools:
 - get_recommendations: Get recommendations or upgrades/downgrades for a given ticker symbol from yahoo finance. You can also specify the number of months back to get upgrades/downgrades for, default is 12.
 """,
 )
+
+# Initialize SnapTrade client for brokerage integration
+# Credentials should be set as environment variables:
+# - SNAPTRADE_CONSUMER_KEY
+# - SNAPTRADE_CLIENT_ID
+# - SNAPTRADE_USER_ID (optional, for single-user setup)
+# - SNAPTRADE_USER_SECRET (optional, for single-user setup)
+snaptrade_client = None
+try:
+    consumer_key = os.getenv("SNAPTRADE_CONSUMER_KEY")
+    client_id = os.getenv("SNAPTRADE_CLIENT_ID")
+
+    if consumer_key and client_id:
+        snaptrade_client = SnapTrade(
+            consumer_key=consumer_key,
+            client_id=client_id
+        )
+except Exception as e:
+    print(f"Warning: SnapTrade client initialization failed: {e}")
 
 
 @yfinance_server.tool(
@@ -501,6 +522,335 @@ def calculate(expression: str) -> str:
         
     except Exception as e:
         return f"Error executing code: {type(e).__name__}: {str(e)}"
+
+
+# ============================================================================
+# SnapTrade Tools - Brokerage Account Integration
+# ============================================================================
+
+@yfinance_server.tool()
+def snaptrade_register_user(user_id: Optional[str] = None) -> str:
+    """
+    Register a new SnapTrade user to connect brokerage accounts.
+
+    This is a one-time setup step. Returns a user_secret that must be stored securely
+    and used for all subsequent SnapTrade operations.
+
+    Args:
+        user_id: Unique identifier for the user. If not provided, uses SNAPTRADE_USER_ID
+                 from environment variables.
+
+    Returns:
+        JSON string containing user_id and user_secret (IMPORTANT: Save this!)
+
+    Note: If SnapTrade is not configured (missing API credentials), returns an error message.
+    """
+    if not snaptrade_client:
+        return json.dumps({
+            "error": "SnapTrade not configured",
+            "message": "Set SNAPTRADE_CONSUMER_KEY and SNAPTRADE_CLIENT_ID environment variables"
+        })
+
+    try:
+        # Use provided user_id or fall back to environment variable
+        if not user_id:
+            user_id = os.getenv("SNAPTRADE_USER_ID")
+            if not user_id:
+                return json.dumps({
+                    "error": "user_id required",
+                    "message": "Provide user_id parameter or set SNAPTRADE_USER_ID environment variable"
+                })
+
+        response = snaptrade_client.authentication.register_snap_trade_user(
+            user_id=user_id
+        )
+
+        return json.dumps({
+            "success": True,
+            "user_id": user_id,
+            "user_secret": response.get("userSecret"),
+            "message": "User registered successfully. IMPORTANT: Save the user_secret!"
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "error": str(e),
+            "message": "Failed to register user"
+        }, indent=2)
+
+
+@yfinance_server.tool()
+def snaptrade_get_connection_url(
+    user_id: Optional[str] = None,
+    user_secret: Optional[str] = None
+) -> str:
+    """
+    Get URL for user to connect their brokerage account.
+
+    Returns a redirect URL that the user must visit in their browser to authenticate
+    with their brokerage and grant SnapTrade access.
+
+    Args:
+        user_id: SnapTrade user ID. If not provided, uses SNAPTRADE_USER_ID env var.
+        user_secret: SnapTrade user secret. If not provided, uses SNAPTRADE_USER_SECRET env var.
+
+    Returns:
+        JSON string containing the connection URL
+    """
+    if not snaptrade_client:
+        return json.dumps({
+            "error": "SnapTrade not configured",
+            "message": "Set SNAPTRADE_CONSUMER_KEY and SNAPTRADE_CLIENT_ID environment variables"
+        })
+
+    try:
+        # Use provided credentials or fall back to environment variables
+        user_id = user_id or os.getenv("SNAPTRADE_USER_ID")
+        user_secret = user_secret or os.getenv("SNAPTRADE_USER_SECRET")
+
+        if not user_id or not user_secret:
+            return json.dumps({
+                "error": "Credentials required",
+                "message": "Provide user_id and user_secret, or set SNAPTRADE_USER_ID and SNAPTRADE_USER_SECRET"
+            })
+
+        response = snaptrade_client.authentication.login_snap_trade_user(
+            user_id=user_id,
+            user_secret=user_secret
+        )
+
+        return json.dumps({
+            "success": True,
+            "connection_url": response.get("redirectURI"),
+            "message": "Open this URL in your browser to connect your brokerage account"
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "error": str(e),
+            "message": "Failed to get connection URL"
+        }, indent=2)
+
+
+@yfinance_server.tool()
+def snaptrade_list_accounts(
+    user_id: Optional[str] = None,
+    user_secret: Optional[str] = None
+) -> str:
+    """
+    List all connected brokerage accounts for a SnapTrade user.
+
+    Returns account details including IDs, names, institutions, and current balances.
+
+    Args:
+        user_id: SnapTrade user ID. If not provided, uses SNAPTRADE_USER_ID env var.
+        user_secret: SnapTrade user secret. If not provided, uses SNAPTRADE_USER_SECRET env var.
+
+    Returns:
+        JSON string containing list of connected accounts
+    """
+    if not snaptrade_client:
+        return json.dumps({
+            "error": "SnapTrade not configured"
+        })
+
+    try:
+        user_id = user_id or os.getenv("SNAPTRADE_USER_ID")
+        user_secret = user_secret or os.getenv("SNAPTRADE_USER_SECRET")
+
+        if not user_id or not user_secret:
+            return json.dumps({
+                "error": "Credentials required"
+            })
+
+        accounts = snaptrade_client.account_information.list_user_accounts(
+            user_id=user_id,
+            user_secret=user_secret
+        )
+
+        # Format the response for better readability
+        formatted_accounts = []
+        for account in accounts:
+            formatted_accounts.append({
+                "account_id": account.get("id"),
+                "name": account.get("name"),
+                "number": account.get("number"),
+                "institution": account.get("institution_name"),
+                "balance": account.get("balance"),
+                "meta": account.get("meta", {})
+            })
+
+        return json.dumps({
+            "success": True,
+            "count": len(formatted_accounts),
+            "accounts": formatted_accounts
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "error": str(e)
+        }, indent=2)
+
+
+@yfinance_server.tool()
+def snaptrade_get_holdings(
+    account_id: str,
+    user_id: Optional[str] = None,
+    user_secret: Optional[str] = None
+) -> str:
+    """
+    Get holdings/positions for a specific brokerage account.
+
+    Returns detailed information about all positions including stocks, ETFs, options,
+    and cryptocurrencies held in the account.
+
+    Args:
+        account_id: The SnapTrade account ID (UUID from snaptrade_list_accounts)
+        user_id: SnapTrade user ID. If not provided, uses SNAPTRADE_USER_ID env var.
+        user_secret: SnapTrade user secret. If not provided, uses SNAPTRADE_USER_SECRET env var.
+
+    Returns:
+        JSON string containing account holdings with positions and balances
+    """
+    if not snaptrade_client:
+        return json.dumps({
+            "error": "SnapTrade not configured"
+        })
+
+    try:
+        user_id = user_id or os.getenv("SNAPTRADE_USER_ID")
+        user_secret = user_secret or os.getenv("SNAPTRADE_USER_SECRET")
+
+        if not user_id or not user_secret:
+            return json.dumps({
+                "error": "Credentials required"
+            })
+
+        holdings = snaptrade_client.account_information.get_user_holdings(
+            account_id=account_id,
+            user_id=user_id,
+            user_secret=user_secret
+        )
+
+        # Format the response for better readability
+        result = {
+            "success": True,
+            "account": {
+                "id": holdings.get("account", {}).get("id"),
+                "name": holdings.get("account", {}).get("name"),
+                "number": holdings.get("account", {}).get("number"),
+                "institution": holdings.get("account", {}).get("institution_name")
+            },
+            "balances": holdings.get("balances", []),
+            "positions": []
+        }
+
+        # Format positions
+        for position in holdings.get("positions", []):
+            symbol = position.get("symbol", {})
+            result["positions"].append({
+                "symbol": symbol.get("symbol"),
+                "description": symbol.get("description"),
+                "units": position.get("units"),
+                "price": position.get("price"),
+                "open_pnl": position.get("open_pnl"),
+                "fractional_units": position.get("fractional_units"),
+                "currency": symbol.get("currency", {}).get("code")
+            })
+
+        result["total_value"] = holdings.get("total_value")
+
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "error": str(e)
+        }, indent=2)
+
+
+@yfinance_server.tool()
+def snaptrade_get_transactions(
+    account_id: str,
+    start_date: str,
+    end_date: str,
+    user_id: Optional[str] = None,
+    user_secret: Optional[str] = None,
+    transaction_type: Optional[str] = None
+) -> str:
+    """
+    Get transaction history for a brokerage account.
+
+    Returns historical transactions including buys, sells, dividends, deposits, and withdrawals.
+    Data is refreshed once daily. Results are paginated with max 1000 per request.
+
+    Args:
+        account_id: The SnapTrade account ID (UUID from snaptrade_list_accounts)
+        start_date: Start date in YYYY-MM-DD format (e.g., "2024-01-01")
+        end_date: End date in YYYY-MM-DD format (e.g., "2024-12-31")
+        user_id: SnapTrade user ID. If not provided, uses SNAPTRADE_USER_ID env var.
+        user_secret: SnapTrade user secret. If not provided, uses SNAPTRADE_USER_SECRET env var.
+        transaction_type: Optional filter by type (e.g., "BUY,SELL,DIVIDEND")
+
+    Returns:
+        JSON string containing transaction history
+    """
+    if not snaptrade_client:
+        return json.dumps({
+            "error": "SnapTrade not configured"
+        })
+
+    try:
+        user_id = user_id or os.getenv("SNAPTRADE_USER_ID")
+        user_secret = user_secret or os.getenv("SNAPTRADE_USER_SECRET")
+
+        if not user_id or not user_secret:
+            return json.dumps({
+                "error": "Credentials required"
+            })
+
+        # Build request parameters
+        params = {
+            "account_id": account_id,
+            "user_id": user_id,
+            "user_secret": user_secret,
+            "start_date": start_date,
+            "end_date": end_date
+        }
+
+        if transaction_type:
+            params["type"] = transaction_type
+
+        activities = snaptrade_client.account_information.get_account_activities(**params)
+
+        # Format the response
+        formatted_activities = []
+        for activity in activities:
+            formatted_activities.append({
+                "id": activity.get("id"),
+                "type": activity.get("type"),
+                "symbol": activity.get("symbol"),
+                "description": activity.get("description"),
+                "trade_date": activity.get("trade_date"),
+                "settlement_date": activity.get("settlement_date"),
+                "units": activity.get("units"),
+                "price": activity.get("price"),
+                "amount": activity.get("amount"),
+                "currency": activity.get("currency"),
+                "fee": activity.get("fee"),
+                "institution": activity.get("institution")
+            })
+
+        return json.dumps({
+            "success": True,
+            "count": len(formatted_activities),
+            "transactions": formatted_activities,
+            "note": "Data refreshed once daily. Max 1000 transactions per request."
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "error": str(e)
+        }, indent=2)
 
 
 if __name__ == "__main__":
