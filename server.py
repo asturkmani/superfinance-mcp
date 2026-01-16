@@ -572,10 +572,15 @@ def snaptrade_register_user(user_id: Optional[str] = None) -> str:
             user_id=user_id
         )
 
+        # Handle SDK response object
+        data = response.body if hasattr(response, 'body') else response
+        if hasattr(data, 'to_dict'):
+            data = data.to_dict()
+
         return json.dumps({
             "success": True,
             "user_id": user_id,
-            "user_secret": response.get("userSecret"),
+            "user_secret": data.get("userSecret") if isinstance(data, dict) else getattr(data, 'user_secret', None),
             "message": "User registered successfully. IMPORTANT: Save the user_secret!"
         }, indent=2)
 
@@ -626,9 +631,16 @@ def snaptrade_get_connection_url(
             user_secret=user_secret
         )
 
+        # Handle SDK response object
+        data = response.body if hasattr(response, 'body') else response
+        if hasattr(data, 'to_dict'):
+            data = data.to_dict()
+
+        redirect_uri = data.get("redirectURI") if isinstance(data, dict) else getattr(data, 'redirect_uri', None)
+
         return json.dumps({
             "success": True,
-            "connection_url": response.get("redirectURI"),
+            "connection_url": redirect_uri,
             "message": "Open this URL in your browser to connect your brokerage account"
         }, indent=2)
 
@@ -670,14 +682,23 @@ def snaptrade_list_accounts(
                 "error": "Credentials required"
             })
 
-        accounts = snaptrade_client.account_information.list_user_accounts(
+        response = snaptrade_client.account_information.list_user_accounts(
             user_id=user_id,
             user_secret=user_secret
         )
 
+        # Handle SDK response object - get the actual data
+        accounts = response.body if hasattr(response, 'body') else response
+
         # Format the response for better readability
         formatted_accounts = []
         for account in accounts:
+            # Handle both dict and object responses
+            if hasattr(account, 'to_dict'):
+                account = account.to_dict()
+            elif hasattr(account, '__dict__'):
+                account = vars(account)
+
             formatted_accounts.append({
                 "account_id": account.get("id"),
                 "name": account.get("name"),
@@ -733,39 +754,63 @@ def snaptrade_get_holdings(
                 "error": "Credentials required"
             })
 
-        holdings = snaptrade_client.account_information.get_user_holdings(
+        response = snaptrade_client.account_information.get_user_holdings(
             account_id=account_id,
             user_id=user_id,
             user_secret=user_secret
         )
 
+        # Handle SDK response object
+        holdings = response.body if hasattr(response, 'body') else response
+        if hasattr(holdings, 'to_dict'):
+            holdings = holdings.to_dict()
+
+        # Helper to safely get nested dict values
+        def safe_get(obj, key, default=None):
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return getattr(obj, key, default)
+
+        account_data = safe_get(holdings, "account", {})
+        if hasattr(account_data, 'to_dict'):
+            account_data = account_data.to_dict()
+
         # Format the response for better readability
         result = {
             "success": True,
             "account": {
-                "id": holdings.get("account", {}).get("id"),
-                "name": holdings.get("account", {}).get("name"),
-                "number": holdings.get("account", {}).get("number"),
-                "institution": holdings.get("account", {}).get("institution_name")
+                "id": safe_get(account_data, "id"),
+                "name": safe_get(account_data, "name"),
+                "number": safe_get(account_data, "number"),
+                "institution": safe_get(account_data, "institution_name")
             },
-            "balances": holdings.get("balances", []),
+            "balances": safe_get(holdings, "balances", []),
             "positions": []
         }
 
         # Format positions
-        for position in holdings.get("positions", []):
-            symbol = position.get("symbol", {})
+        positions = safe_get(holdings, "positions", [])
+        for position in positions:
+            if hasattr(position, 'to_dict'):
+                position = position.to_dict()
+            symbol = safe_get(position, "symbol", {})
+            if hasattr(symbol, 'to_dict'):
+                symbol = symbol.to_dict()
+            currency = safe_get(symbol, "currency", {})
+            if hasattr(currency, 'to_dict'):
+                currency = currency.to_dict()
+
             result["positions"].append({
-                "symbol": symbol.get("symbol"),
-                "description": symbol.get("description"),
-                "units": position.get("units"),
-                "price": position.get("price"),
-                "open_pnl": position.get("open_pnl"),
-                "fractional_units": position.get("fractional_units"),
-                "currency": symbol.get("currency", {}).get("code")
+                "symbol": safe_get(symbol, "symbol"),
+                "description": safe_get(symbol, "description"),
+                "units": safe_get(position, "units"),
+                "price": safe_get(position, "price"),
+                "open_pnl": safe_get(position, "open_pnl"),
+                "fractional_units": safe_get(position, "fractional_units"),
+                "currency": safe_get(currency, "code") if currency else None
             })
 
-        result["total_value"] = holdings.get("total_value")
+        result["total_value"] = safe_get(holdings, "total_value")
 
         return json.dumps(result, indent=2)
 
@@ -827,24 +872,36 @@ def snaptrade_get_transactions(
         if transaction_type:
             params["type"] = transaction_type
 
-        activities = snaptrade_client.account_information.get_account_activities(**params)
+        response = snaptrade_client.account_information.get_account_activities(**params)
+
+        # Handle SDK response object
+        activities = response.body if hasattr(response, 'body') else response
+
+        # Helper to safely get values
+        def safe_get(obj, key, default=None):
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return getattr(obj, key, default)
 
         # Format the response
         formatted_activities = []
         for activity in activities:
+            if hasattr(activity, 'to_dict'):
+                activity = activity.to_dict()
+
             formatted_activities.append({
-                "id": activity.get("id"),
-                "type": activity.get("type"),
-                "symbol": activity.get("symbol"),
-                "description": activity.get("description"),
-                "trade_date": activity.get("trade_date"),
-                "settlement_date": activity.get("settlement_date"),
-                "units": activity.get("units"),
-                "price": activity.get("price"),
-                "amount": activity.get("amount"),
-                "currency": activity.get("currency"),
-                "fee": activity.get("fee"),
-                "institution": activity.get("institution")
+                "id": safe_get(activity, "id"),
+                "type": safe_get(activity, "type"),
+                "symbol": safe_get(activity, "symbol"),
+                "description": safe_get(activity, "description"),
+                "trade_date": safe_get(activity, "trade_date"),
+                "settlement_date": safe_get(activity, "settlement_date"),
+                "units": safe_get(activity, "units"),
+                "price": safe_get(activity, "price"),
+                "amount": safe_get(activity, "amount"),
+                "currency": safe_get(activity, "currency"),
+                "fee": safe_get(activity, "fee"),
+                "institution": safe_get(activity, "institution")
             })
 
         return json.dumps({
