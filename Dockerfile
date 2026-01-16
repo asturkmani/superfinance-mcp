@@ -14,9 +14,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy Python packages and CLI executables from builder
+# Install flyctl for MCP wrapper
+RUN apt-get update && apt-get install -y curl && \
+    curl -L https://fly.io/install.sh | sh && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.fly/bin:${PATH}"
+
+# Copy Python packages from builder
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY server.py ./
@@ -26,5 +32,5 @@ COPY pyproject.toml ./
 # Expose port for SSE
 EXPOSE 8080
 
-# Run server with MCP CLI using HTTP transport
-CMD ["mcp", "run", "server.py:yfinance_server", "--transport", "http", "--host", "0.0.0.0", "--port", "8080"]
+# Use flyctl mcp wrap (simple, works, no auth = unlimited clients)
+CMD ["flyctl", "mcp", "wrap", "--", "/usr/local/bin/python3", "server.py"]
