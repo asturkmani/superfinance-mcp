@@ -1,9 +1,13 @@
 import argparse
 import json
+import math
 from enum import Enum
 from typing import Any
+from io import StringIO
+import sys
 
 import pandas as pd
+import numpy as np
 import yfinance as yf
 from fastmcp import FastMCP
 
@@ -411,6 +415,92 @@ async def get_recommendations(ticker: str, recommendation_type: str, months_back
     except Exception as e:
         print(f"Error: getting recommendations for {ticker}: {e}")
         return f"Error: getting recommendations for {ticker}: {e}"
+
+
+@yfinance_server.tool()
+def calculate(expression: str) -> str:
+    """
+    Execute Python code for calculations and data analysis.
+    
+    Useful for:
+    - Mathematical calculations
+    - Financial analysis with stock data
+    - Data manipulation with pandas/numpy
+    - Statistical computations
+    
+    Available libraries: math, numpy (as np), pandas (as pd), json
+    
+    Args:
+        expression: Python code to execute. Can include multiple lines.
+                   The last expression will be returned.
+                   Use print() for intermediate output.
+    
+    Returns:
+        String containing the result and any printed output
+    
+    Example:
+        expression = '''
+        stock_price = 186.23
+        strike_prices = [180, 185, 190, 195]
+        intrinsic_values = [max(0, stock_price - strike) for strike in strike_prices]
+        print(f"Intrinsic values: {intrinsic_values}")
+        intrinsic_values
+        '''
+    """
+    try:
+        # Create a safe execution environment with common libraries
+        safe_globals = {
+            '__builtins__': {
+                'abs': abs, 'round': round, 'min': min, 'max': max,
+                'sum': sum, 'len': len, 'range': range, 'enumerate': enumerate,
+                'zip': zip, 'map': map, 'filter': filter, 'sorted': sorted,
+                'list': list, 'dict': dict, 'set': set, 'tuple': tuple,
+                'str': str, 'int': int, 'float': float, 'bool': bool,
+                'print': print, 'True': True, 'False': False, 'None': None,
+            },
+            'math': math,
+            'np': np,
+            'pd': pd,
+            'json': json,
+        }
+        
+        # Capture stdout to get print statements
+        old_stdout = sys.stdout
+        sys.stdout = StringIO()
+        
+        # Create a local namespace for execution
+        local_vars = {}
+        
+        # Execute the code
+        exec(expression, safe_globals, local_vars)
+        
+        # Get the printed output
+        output = sys.stdout.getvalue()
+        sys.stdout = old_stdout
+        
+        # Get the last expression's value if any
+        # Look for the last line that isn't an assignment or import
+        lines = expression.strip().split('\n')
+        last_line = lines[-1].strip() if lines else ''
+        
+        result_parts = []
+        if output:
+            result_parts.append(f"Output:\n{output}")
+        
+        # If the last line is an expression (not assignment), it will be in local_vars
+        # Try to get a result value
+        if last_line and '=' not in last_line and not last_line.startswith(('import', 'from', 'def', 'class', 'if', 'for', 'while')):
+            try:
+                result_value = eval(last_line, safe_globals, local_vars)
+                if result_value is not None:
+                    result_parts.append(f"Result:\n{result_value}")
+            except:
+                pass
+        
+        return '\n\n'.join(result_parts) if result_parts else "Code executed successfully (no output)"
+        
+    except Exception as e:
+        return f"Error executing code: {type(e).__name__}: {str(e)}"
 
 
 if __name__ == "__main__":
