@@ -1079,6 +1079,81 @@ def snaptrade_list_all_holdings(
 
                     positions.append(pos_data)
 
+                # Process option positions
+                option_positions = []
+                for opt_pos in holdings.get("option_positions", []):
+                    if hasattr(opt_pos, 'to_dict'):
+                        opt_pos = opt_pos.to_dict()
+
+                    # Extract option symbol info
+                    opt_symbol = opt_pos.get("option_symbol", {})
+                    if hasattr(opt_symbol, 'to_dict'):
+                        opt_symbol = opt_symbol.to_dict()
+
+                    underlying = opt_symbol.get("underlying_symbol", {})
+                    if hasattr(underlying, 'to_dict'):
+                        underlying = underlying.to_dict()
+
+                    opt_currency = underlying.get("currency", {})
+                    if hasattr(opt_currency, 'to_dict'):
+                        opt_currency = opt_currency.to_dict()
+
+                    units = opt_pos.get("units") or 0
+                    snaptrade_price = opt_pos.get("price")
+                    average_cost = opt_pos.get("average_purchase_price")
+
+                    # Options are typically 100 shares per contract
+                    multiplier = 100 if not opt_symbol.get("is_mini_option") else 10
+                    market_value = (units * snaptrade_price * multiplier) if snaptrade_price and units else None
+                    cost_basis = (units * average_cost * multiplier) if average_cost and units else None
+
+                    unrealized_pnl = None
+                    unrealized_pnl_pct = None
+                    if market_value is not None and cost_basis is not None and cost_basis != 0:
+                        unrealized_pnl = market_value - cost_basis
+                        unrealized_pnl_pct = round((unrealized_pnl / abs(cost_basis)) * 100, 2)
+
+                    opt_data = {
+                        "type": "option",
+                        "ticker": opt_symbol.get("ticker"),
+                        "underlying": underlying.get("symbol"),
+                        "option_type": opt_symbol.get("option_type"),  # CALL or PUT
+                        "strike_price": opt_symbol.get("strike_price"),
+                        "expiration_date": opt_symbol.get("expiration_date"),
+                        "units": units,  # Number of contracts
+                        "multiplier": multiplier,
+                        "currency": opt_currency.get("code") if isinstance(opt_currency, dict) else None,
+                        "price_per_share": snaptrade_price,
+                        "market_value": round(market_value, 2) if market_value else None,
+                        "average_cost": average_cost,
+                        "cost_basis": round(cost_basis, 2) if cost_basis else None,
+                        "unrealized_pnl": round(unrealized_pnl, 2) if unrealized_pnl else None,
+                        "unrealized_pnl_pct": unrealized_pnl_pct
+                    }
+
+                    # Currency conversion for options
+                    opt_curr = opt_data.get("currency")
+                    if target_currency and opt_curr and opt_curr != target_currency:
+                        fx_rate = _get_fx_rate_cached(opt_curr, target_currency, fx_cache)
+                        if fx_rate:
+                            fx_key = f"{opt_curr}_{target_currency}"
+                            fx_rates_used[fx_key] = fx_rate
+
+                            opt_data["converted"] = {
+                                "currency": target_currency,
+                                "fx_rate": fx_rate,
+                                "market_value": round(market_value * fx_rate, 2) if market_value else None,
+                                "cost_basis": round(cost_basis * fx_rate, 2) if cost_basis else None,
+                                "unrealized_pnl": round(unrealized_pnl * fx_rate, 2) if unrealized_pnl else None
+                            }
+                            if market_value:
+                                account_value_converted += market_value * fx_rate
+                    elif target_currency and opt_curr == target_currency:
+                        if market_value:
+                            account_value_converted += market_value
+
+                    option_positions.append(opt_data)
+
                 if target_currency and total_value_converted is not None:
                     total_value_converted += account_value_converted
 
@@ -1088,7 +1163,9 @@ def snaptrade_list_all_holdings(
                     "institution": account.get("institution_name"),
                     "balance": balance,
                     "positions_count": len(positions),
-                    "positions": positions
+                    "positions": positions,
+                    "option_positions_count": len(option_positions),
+                    "option_positions": option_positions
                 })
 
             except Exception as e:
