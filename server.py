@@ -822,6 +822,133 @@ def snaptrade_get_holdings(
 
 
 @yfinance_server.tool()
+def snaptrade_list_all_holdings(
+    user_id: Optional[str] = None,
+    user_secret: Optional[str] = None
+) -> str:
+    """
+    Get holdings for ALL connected brokerage accounts in one call.
+
+    This is a convenience tool that combines list_accounts + get_holdings for each account.
+    Returns a complete portfolio view across all connected brokerages.
+
+    Args:
+        user_id: SnapTrade user ID. If not provided, uses SNAPTRADE_USER_ID env var.
+        user_secret: SnapTrade user secret. If not provided, uses SNAPTRADE_USER_SECRET env var.
+
+    Returns:
+        JSON string containing all accounts with their holdings
+    """
+    if not snaptrade_client:
+        return json.dumps({
+            "error": "SnapTrade not configured"
+        })
+
+    try:
+        user_id = user_id or os.getenv("SNAPTRADE_USER_ID")
+        user_secret = user_secret or os.getenv("SNAPTRADE_USER_SECRET")
+
+        if not user_id or not user_secret:
+            return json.dumps({
+                "error": "Credentials required"
+            })
+
+        # Step 1: Get all accounts
+        accounts_response = snaptrade_client.account_information.list_user_accounts(
+            user_id=user_id,
+            user_secret=user_secret
+        )
+        accounts = accounts_response.body if hasattr(accounts_response, 'body') else accounts_response
+
+        # Step 2: Get holdings for each account
+        all_holdings = []
+        total_value_by_currency = {}
+
+        for account in accounts:
+            if hasattr(account, 'to_dict'):
+                account = account.to_dict()
+
+            account_id = account.get("id")
+
+            try:
+                holdings_response = snaptrade_client.account_information.get_user_holdings(
+                    account_id=account_id,
+                    user_id=user_id,
+                    user_secret=user_secret
+                )
+                holdings = holdings_response.body if hasattr(holdings_response, 'body') else holdings_response
+                if hasattr(holdings, 'to_dict'):
+                    holdings = holdings.to_dict()
+
+                # Extract balance info
+                balance = account.get("balance", {})
+                if isinstance(balance, dict) and "total" in balance:
+                    total = balance["total"]
+                    currency = total.get("currency", "USD")
+                    amount = total.get("amount", 0)
+                    total_value_by_currency[currency] = total_value_by_currency.get(currency, 0) + amount
+
+                # Format positions
+                positions = []
+                for position in holdings.get("positions", []):
+                    if hasattr(position, 'to_dict'):
+                        position = position.to_dict()
+                    symbol_data = position.get("symbol", {})
+                    if hasattr(symbol_data, 'to_dict'):
+                        symbol_data = symbol_data.to_dict()
+
+                    # Handle nested symbol structure
+                    if "symbol" in symbol_data and isinstance(symbol_data["symbol"], dict):
+                        inner_symbol = symbol_data["symbol"]
+                        positions.append({
+                            "symbol": inner_symbol.get("symbol"),
+                            "description": inner_symbol.get("description"),
+                            "units": position.get("units"),
+                            "price": position.get("price"),
+                            "open_pnl": position.get("open_pnl"),
+                            "currency": inner_symbol.get("currency", {}).get("code") if isinstance(inner_symbol.get("currency"), dict) else None
+                        })
+                    else:
+                        positions.append({
+                            "symbol": symbol_data.get("symbol"),
+                            "description": symbol_data.get("description"),
+                            "units": position.get("units"),
+                            "price": position.get("price"),
+                            "open_pnl": position.get("open_pnl"),
+                            "currency": symbol_data.get("currency", {}).get("code") if isinstance(symbol_data.get("currency"), dict) else None
+                        })
+
+                all_holdings.append({
+                    "account_id": account_id,
+                    "name": account.get("name"),
+                    "institution": account.get("institution_name"),
+                    "balance": balance,
+                    "positions_count": len(positions),
+                    "positions": positions
+                })
+
+            except Exception as e:
+                all_holdings.append({
+                    "account_id": account_id,
+                    "name": account.get("name"),
+                    "institution": account.get("institution_name"),
+                    "error": str(e)
+                })
+
+        return json.dumps({
+            "success": True,
+            "accounts_count": len(all_holdings),
+            "total_value_by_currency": total_value_by_currency,
+            "accounts": all_holdings
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "error": str(e)
+        }, indent=2)
+
+
+@yfinance_server.tool()
 def snaptrade_get_transactions(
     account_id: str,
     start_date: str,
