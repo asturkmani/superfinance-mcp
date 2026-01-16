@@ -871,23 +871,73 @@ def snaptrade_get_holdings(
         }, indent=2)
 
 
+def _get_live_price(symbol: str) -> dict:
+    """
+    Helper to fetch live price from Yahoo Finance for a symbol.
+    Returns dict with price info or error.
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        price = info.get("regularMarketPrice")
+        if price is not None:
+            return {
+                "price": price,
+                "source": "yahoo_finance",
+                "currency": info.get("currency"),
+                "name": info.get("shortName") or info.get("longName")
+            }
+        return {"price": None, "source": "unavailable", "error": f"No price for {symbol}"}
+    except Exception as e:
+        return {"price": None, "source": "error", "error": str(e)}
+
+
+def _get_fx_rate_cached(from_currency: str, to_currency: str, cache: dict) -> Optional[float]:
+    """
+    Helper to get FX rate with caching to avoid repeated API calls.
+    """
+    if from_currency == to_currency:
+        return 1.0
+
+    cache_key = f"{from_currency}_{to_currency}"
+    if cache_key in cache:
+        return cache[cache_key]
+
+    try:
+        ticker_symbol = f"{from_currency.upper()}{to_currency.upper()}=X"
+        ticker = yf.Ticker(ticker_symbol)
+        rate = ticker.info.get("regularMarketPrice")
+        if rate:
+            cache[cache_key] = rate
+            return rate
+    except:
+        pass
+
+    return None
+
+
 @yfinance_server.tool()
 def snaptrade_list_all_holdings(
     user_id: Optional[str] = None,
-    user_secret: Optional[str] = None
+    user_secret: Optional[str] = None,
+    target_currency: Optional[str] = None
 ) -> str:
     """
-    Get holdings for ALL connected brokerage accounts in one call.
+    Get holdings for ALL connected brokerage accounts with live prices from Yahoo Finance.
 
-    This is a convenience tool that combines list_accounts + get_holdings for each account.
-    Returns a complete portfolio view across all connected brokerages.
+    This tool fetches holdings from all connected brokerages and enriches them with:
+    - Live prices from Yahoo Finance (more current than brokerage data)
+    - Currency conversion to a target currency (optional)
+    - Calculated market values and P&L
 
     Args:
         user_id: SnapTrade user ID. If not provided, uses SNAPTRADE_USER_ID env var.
         user_secret: SnapTrade user secret. If not provided, uses SNAPTRADE_USER_SECRET env var.
+        target_currency: Optional currency code (e.g., "GBP", "EUR") to convert all values to.
+                        If not provided, values are shown in their original currencies.
 
     Returns:
-        JSON string containing all accounts with their holdings
+        JSON string containing all accounts with enriched holdings including live prices
     """
     if not snaptrade_client:
         return json.dumps({
@@ -910,9 +960,14 @@ def snaptrade_list_all_holdings(
         )
         accounts = accounts_response.body if hasattr(accounts_response, 'body') else accounts_response
 
+        # FX rate cache to avoid repeated lookups
+        fx_cache = {}
+        fx_rates_used = {}
+
         # Step 2: Get holdings for each account
         all_holdings = []
         total_value_by_currency = {}
+        total_value_converted = 0.0 if target_currency else None
 
         for account in accounts:
             if hasattr(account, 'to_dict'):
@@ -938,8 +993,10 @@ def snaptrade_list_all_holdings(
                     amount = total.get("amount", 0)
                     total_value_by_currency[currency] = total_value_by_currency.get(currency, 0) + amount
 
-                # Format positions
+                # Format positions with live prices
                 positions = []
+                account_value_converted = 0.0
+
                 for position in holdings.get("positions", []):
                     if hasattr(position, 'to_dict'):
                         position = position.to_dict()
@@ -950,23 +1007,80 @@ def snaptrade_list_all_holdings(
                     # Handle nested symbol structure
                     if "symbol" in symbol_data and isinstance(symbol_data["symbol"], dict):
                         inner_symbol = symbol_data["symbol"]
-                        positions.append({
-                            "symbol": inner_symbol.get("symbol"),
-                            "description": inner_symbol.get("description"),
-                            "units": position.get("units"),
-                            "price": position.get("price"),
-                            "open_pnl": position.get("open_pnl"),
-                            "currency": inner_symbol.get("currency", {}).get("code") if isinstance(inner_symbol.get("currency"), dict) else None
-                        })
+                        symbol_ticker = inner_symbol.get("symbol")
+                        description = inner_symbol.get("description")
+                        pos_currency = inner_symbol.get("currency", {}).get("code") if isinstance(inner_symbol.get("currency"), dict) else None
                     else:
-                        positions.append({
-                            "symbol": symbol_data.get("symbol"),
-                            "description": symbol_data.get("description"),
-                            "units": position.get("units"),
-                            "price": position.get("price"),
-                            "open_pnl": position.get("open_pnl"),
-                            "currency": symbol_data.get("currency", {}).get("code") if isinstance(symbol_data.get("currency"), dict) else None
-                        })
+                        symbol_ticker = symbol_data.get("symbol")
+                        description = symbol_data.get("description")
+                        pos_currency = symbol_data.get("currency", {}).get("code") if isinstance(symbol_data.get("currency"), dict) else None
+
+                    units = position.get("units") or 0
+                    snaptrade_price = position.get("price")
+                    average_cost = position.get("average_purchase_price")
+
+                    # Fetch live price from Yahoo Finance
+                    live_data = _get_live_price(symbol_ticker) if symbol_ticker else {"price": None, "source": "no_symbol"}
+                    live_price = live_data.get("price")
+                    price_source = live_data.get("source", "unknown")
+
+                    # Use live price if available, fallback to SnapTrade price
+                    current_price = live_price if live_price is not None else snaptrade_price
+
+                    # Calculate market value
+                    market_value = (units * current_price) if current_price and units else None
+
+                    # Calculate cost basis
+                    cost_basis = (units * average_cost) if average_cost and units else None
+
+                    # Calculate P&L
+                    unrealized_pnl = None
+                    unrealized_pnl_pct = None
+                    if market_value is not None and cost_basis is not None and cost_basis > 0:
+                        unrealized_pnl = market_value - cost_basis
+                        unrealized_pnl_pct = round((unrealized_pnl / cost_basis) * 100, 2)
+
+                    # Build position data
+                    pos_data = {
+                        "symbol": symbol_ticker,
+                        "description": description,
+                        "units": units,
+                        "currency": pos_currency,
+                        "live_price": live_price,
+                        "snaptrade_price": snaptrade_price,
+                        "price_source": price_source,
+                        "market_value": round(market_value, 2) if market_value else None,
+                        "average_cost": average_cost,
+                        "cost_basis": round(cost_basis, 2) if cost_basis else None,
+                        "unrealized_pnl": round(unrealized_pnl, 2) if unrealized_pnl else None,
+                        "unrealized_pnl_pct": unrealized_pnl_pct
+                    }
+
+                    # Currency conversion if target_currency specified
+                    if target_currency and pos_currency and pos_currency != target_currency:
+                        fx_rate = _get_fx_rate_cached(pos_currency, target_currency, fx_cache)
+                        if fx_rate:
+                            fx_key = f"{pos_currency}_{target_currency}"
+                            fx_rates_used[fx_key] = fx_rate
+
+                            pos_data["converted"] = {
+                                "currency": target_currency,
+                                "fx_rate": fx_rate,
+                                "live_price": round(live_price * fx_rate, 2) if live_price else None,
+                                "market_value": round(market_value * fx_rate, 2) if market_value else None,
+                                "cost_basis": round(cost_basis * fx_rate, 2) if cost_basis else None,
+                                "unrealized_pnl": round(unrealized_pnl * fx_rate, 2) if unrealized_pnl else None
+                            }
+                            if market_value:
+                                account_value_converted += market_value * fx_rate
+                    elif target_currency and pos_currency == target_currency:
+                        if market_value:
+                            account_value_converted += market_value
+
+                    positions.append(pos_data)
+
+                if target_currency and total_value_converted is not None:
+                    total_value_converted += account_value_converted
 
                 all_holdings.append({
                     "account_id": account_id,
@@ -985,12 +1099,21 @@ def snaptrade_list_all_holdings(
                     "error": str(e)
                 })
 
-        return json.dumps({
+        result = {
             "success": True,
             "accounts_count": len(all_holdings),
             "total_value_by_currency": total_value_by_currency,
             "accounts": all_holdings
-        }, indent=2)
+        }
+
+        if target_currency:
+            result["target_currency"] = target_currency
+            result["fx_rates_used"] = fx_rates_used
+            result["total_value_converted"] = {
+                target_currency: round(total_value_converted, 2)
+            } if total_value_converted else None
+
+        return json.dumps(result, indent=2)
 
     except Exception as e:
         return json.dumps({
@@ -1139,6 +1262,68 @@ def snaptrade_disconnect_account(
         return json.dumps({
             "success": True,
             "message": f"Brokerage connection {authorization_id} has been disconnected and all associated data removed."
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "error": str(e)
+        }, indent=2)
+
+
+@yfinance_server.tool()
+def snaptrade_refresh_account(
+    authorization_id: str,
+    user_id: Optional[str] = None,
+    user_secret: Optional[str] = None
+) -> str:
+    """
+    Trigger a manual refresh of holdings data for a brokerage connection.
+
+    SnapTrade syncs holdings once daily by default. Use this to force an immediate
+    refresh of all accounts under a brokerage connection. The refresh is queued
+    asynchronously - data may take a few moments to update.
+
+    Args:
+        authorization_id: The brokerage authorization ID (get from snaptrade_list_accounts,
+                         it's the 'brokerage_authorization' field in each account)
+        user_id: SnapTrade user ID. If not provided, uses SNAPTRADE_USER_ID env var.
+        user_secret: SnapTrade user secret. If not provided, uses SNAPTRADE_USER_SECRET env var.
+
+    Returns:
+        JSON string confirming refresh has been scheduled
+
+    Note: Each refresh call may incur additional charges depending on your SnapTrade plan.
+    """
+    if not snaptrade_client:
+        return json.dumps({
+            "error": "SnapTrade not configured"
+        })
+
+    try:
+        user_id = user_id or os.getenv("SNAPTRADE_USER_ID")
+        user_secret = user_secret or os.getenv("SNAPTRADE_USER_SECRET")
+
+        if not user_id or not user_secret:
+            return json.dumps({
+                "error": "Credentials required"
+            })
+
+        response = snaptrade_client.connections.refresh_brokerage_authorization(
+            authorization_id=authorization_id,
+            user_id=user_id,
+            user_secret=user_secret
+        )
+
+        # Handle SDK response object
+        data = response.body if hasattr(response, 'body') else response
+        if hasattr(data, 'to_dict'):
+            data = data.to_dict()
+
+        return json.dumps({
+            "success": True,
+            "authorization_id": authorization_id,
+            "message": "Refresh scheduled. Holdings will be updated shortly.",
+            "detail": data.get("detail") if isinstance(data, dict) else str(data)
         }, indent=2)
 
     except Exception as e:
