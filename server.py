@@ -513,7 +513,24 @@ if __name__ == "__main__":
         # Remote deployment - use HTTP
         port = int(os.getenv("PORT", "8080"))
         print(f"Starting Yahoo Finance MCP server on HTTP at 0.0.0.0:{port}")
-        yfinance_server.run(transport="http", host="0.0.0.0", port=port)
+        
+        # Create the MCP app
+        app = yfinance_server.http_app()
+        
+        # Add a simple health check endpoint for Fly.io
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+        
+        async def health_check(request):
+            return JSONResponse({"status": "ok", "service": "yahoo-finance-mcp"})
+        
+        # Add health check route
+        app.routes.insert(0, Route("/", health_check))
+        app.routes.insert(1, Route("/health", health_check))
+        
+        # Run with uvicorn
+        import uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         # Local development - use stdio
         print("Starting Yahoo Finance MCP server with stdio transport")
