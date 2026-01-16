@@ -6,12 +6,19 @@ from enum import Enum
 from typing import Any, Optional
 from io import StringIO
 import sys
+from pathlib import Path
 
 import pandas as pd
 import numpy as np
 import yfinance as yf
 from fastmcp import FastMCP
 from snaptrade_client import SnapTrade
+from dotenv import load_dotenv
+
+# Load environment variables from .env file (for local development)
+env_path = Path(__file__).parent / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
 
 
 # Define an enum for the type of financial statement
