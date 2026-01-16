@@ -1,4 +1,4 @@
-app = 'yahoo-finance-mcp-rikjiq'
+app = 'superfinance-mcp'
 primary_region = 'ams'
 
 [build]

@@ -522,7 +522,7 @@ if __name__ == "__main__":
         from starlette.routing import Route
         
         async def health_check(request):
-            return JSONResponse({"status": "ok", "service": "yahoo-finance-mcp"})
+            return JSONResponse({"status": "ok", "service": "superfinance-mcp"})
         
         # Add health check route
         app.routes.insert(0, Route("/", health_check))

@@ -1,7 +1,7 @@
 [project]
-name = "yahoo-finance-mcp"
+name = "superfinance-mcp"
 version = "0.1.0"
-description = "MCP server implementation for yahoo finance integration"
+description = "SuperFinance MCP server - Advanced financial data and analysis tools"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
