@@ -414,30 +414,6 @@ async def get_recommendations(ticker: str, recommendation_type: str, months_back
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Yahoo Finance MCP Server")
-    parser.add_argument(
-        "--transport",
-        choices=["stdio", "http"],
-        default="stdio",
-        help="Transport type (default: stdio for local, use http for remote SSE)"
-    )
-    parser.add_argument(
-        "--host",
-        default="0.0.0.0",
-        help="Host to bind to for HTTP transport (default: 0.0.0.0)"
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8080,
-        help="Port to bind to for HTTP transport (default: 8080)"
-    )
-    
-    args = parser.parse_args()
-    
-    print(f"Starting Yahoo Finance MCP server with {args.transport} transport...")
-    if args.transport == "http":
-        print(f"Listening on {args.host}:{args.port}")
-        yfinance_server.run(transport="http", host=args.host, port=args.port)
-    else:
-        yfinance_server.run(transport="stdio")
+    # Run the server with stdio transport (default for local use)
+    # For remote deployment, use: python -m mcp.server.fastmcp run server.py:yfinance_server --transport http --host 0.0.0.0 --port 8080
+    yfinance_server.run()
