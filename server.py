@@ -701,6 +701,7 @@ def snaptrade_list_accounts(
 
             formatted_accounts.append({
                 "account_id": account.get("id"),
+                "brokerage_authorization": account.get("brokerage_authorization"),  # Needed for disconnect
                 "name": account.get("name"),
                 "number": account.get("number"),
                 "institution": account.get("institution_name"),
@@ -909,6 +910,58 @@ def snaptrade_get_transactions(
             "count": len(formatted_activities),
             "transactions": formatted_activities,
             "note": "Data refreshed once daily. Max 1000 transactions per request."
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "error": str(e)
+        }, indent=2)
+
+
+@yfinance_server.tool()
+def snaptrade_disconnect_account(
+    authorization_id: str,
+    user_id: Optional[str] = None,
+    user_secret: Optional[str] = None
+) -> str:
+    """
+    Disconnect/remove a brokerage connection from SnapTrade.
+
+    WARNING: This is irreversible! It will remove the brokerage connection and ALL
+    associated accounts and holdings data from SnapTrade.
+
+    Args:
+        authorization_id: The brokerage authorization ID (get from snaptrade_list_accounts,
+                         it's the 'brokerage_authorization' field in each account)
+        user_id: SnapTrade user ID. If not provided, uses SNAPTRADE_USER_ID env var.
+        user_secret: SnapTrade user secret. If not provided, uses SNAPTRADE_USER_SECRET env var.
+
+    Returns:
+        JSON string confirming disconnection or error message
+    """
+    if not snaptrade_client:
+        return json.dumps({
+            "error": "SnapTrade not configured"
+        })
+
+    try:
+        user_id = user_id or os.getenv("SNAPTRADE_USER_ID")
+        user_secret = user_secret or os.getenv("SNAPTRADE_USER_SECRET")
+
+        if not user_id or not user_secret:
+            return json.dumps({
+                "error": "Credentials required"
+            })
+
+        snaptrade_client.connections.remove_brokerage_authorization(
+            authorization_id=authorization_id,
+            user_id=user_id,
+            user_secret=user_secret
+        )
+
+        return json.dumps({
+            "success": True,
+            "message": f"Brokerage connection {authorization_id} has been disconnected and all associated data removed."
         }, indent=2)
 
     except Exception as e:
