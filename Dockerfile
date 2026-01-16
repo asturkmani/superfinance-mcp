@@ -25,5 +25,5 @@ COPY pyproject.toml ./
 # Expose port for SSE
 EXPOSE 8080
 
-# Run server with FastMCP CLI using HTTP transport
-CMD ["fastmcp", "run", "server.py:yfinance_server", "--transport", "http", "--host", "0.0.0.0", "--port", "8080"]
+# Run server with MCP CLI using HTTP transport
+CMD ["mcp", "run", "server.py:yfinance_server", "--transport", "http", "--host", "0.0.0.0", "--port", "8080"]
