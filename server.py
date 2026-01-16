@@ -1085,8 +1085,12 @@ def snaptrade_list_all_holdings(
                     if hasattr(opt_pos, 'to_dict'):
                         opt_pos = opt_pos.to_dict()
 
-                    # Extract option symbol info
-                    opt_symbol = opt_pos.get("option_symbol", {})
+                    # Extract option symbol info - nested inside symbol.option_symbol
+                    symbol_wrapper = opt_pos.get("symbol", {})
+                    if hasattr(symbol_wrapper, 'to_dict'):
+                        symbol_wrapper = symbol_wrapper.to_dict()
+
+                    opt_symbol = symbol_wrapper.get("option_symbol", {})
                     if hasattr(opt_symbol, 'to_dict'):
                         opt_symbol = opt_symbol.to_dict()
 
@@ -1104,8 +1108,10 @@ def snaptrade_list_all_holdings(
 
                     # Options are typically 100 shares per contract
                     multiplier = 100 if not opt_symbol.get("is_mini_option") else 10
+                    # Market value: price is per share, so multiply by contract size
                     market_value = (units * snaptrade_price * multiplier) if snaptrade_price and units else None
-                    cost_basis = (units * average_cost * multiplier) if average_cost and units else None
+                    # Cost basis: average_purchase_price is already per contract (includes multiplier)
+                    cost_basis = (units * average_cost) if average_cost and units else None
 
                     unrealized_pnl = None
                     unrealized_pnl_pct = None
