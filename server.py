@@ -68,7 +68,7 @@ Data is cached in Redis to reduce API calls and improve response times:
 Cache refresh schedules:
 - Stock prices: Every 5 minutes
 - FX rates: Every 5 minutes
-- Holdings: Daily at 6 AM UTC
+- Holdings: Every 12 hours
 """,
 )
 

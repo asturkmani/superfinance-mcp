@@ -4,7 +4,7 @@ Background refresh jobs for SuperFinance MCP cache.
 This module handles scheduled refresh of cached data:
 - Stock prices: Every 5 minutes (market hours) or configurable
 - FX rates: Every 5 minutes
-- Holdings: Daily at 6 AM UTC
+- Holdings: Every 12 hours
 
 Uses APScheduler for in-process scheduling when running on Fly.io.
 """
@@ -37,6 +37,7 @@ from cache import (
 # Refresh intervals (in seconds)
 REFRESH_PRICES_INTERVAL = int(os.getenv("REFRESH_PRICES_INTERVAL", 300))  # 5 minutes
 REFRESH_FX_INTERVAL = int(os.getenv("REFRESH_FX_INTERVAL", 300))  # 5 minutes
+REFRESH_HOLDINGS_INTERVAL = int(os.getenv("REFRESH_HOLDINGS_INTERVAL", 43200))  # 12 hours
 
 # Common FX pairs to always refresh
 COMMON_FX_PAIRS = [
@@ -473,12 +474,12 @@ def start_scheduler():
             replace_existing=True
         )
 
-        # Holdings refresh daily at 6 AM UTC
+        # Holdings refresh every 12 hours
         _scheduler.add_job(
             refresh_all_holdings,
-            CronTrigger(hour=6, minute=0),
+            IntervalTrigger(seconds=REFRESH_HOLDINGS_INTERVAL),
             id="refresh_holdings",
-            name="Refresh holdings (daily)",
+            name="Refresh holdings",
             replace_existing=True
         )
 
@@ -486,7 +487,7 @@ def start_scheduler():
         print(f"[{datetime.utcnow().isoformat()}] Background scheduler started")
         print(f"  - Prices: every {REFRESH_PRICES_INTERVAL}s")
         print(f"  - FX rates: every {REFRESH_FX_INTERVAL}s")
-        print(f"  - Holdings: daily at 6 AM UTC")
+        print(f"  - Holdings: every {REFRESH_HOLDINGS_INTERVAL}s")
 
         # Do an initial refresh
         print("Running initial refresh...")
