@@ -17,6 +17,9 @@ from fastmcp import FastMCP
 from snaptrade_client import SnapTrade
 from dotenv import load_dotenv
 
+import cache
+import refresh
+
 # Load environment variables from .env file (for local development)
 env_path = Path(__file__).parent / '.env'
 if env_path.exists():
@@ -67,12 +70,14 @@ This server provides financial data from Yahoo Finance, brokerage integration vi
 - get_recommendations: Get analyst recommendations or upgrades/downgrades
 - get_fx_rate: Get current foreign exchange rate between two currencies
 
+## Unified Holdings
+- list_all_holdings: Get all holdings from both SnapTrade brokerage accounts AND manual portfolios with live Yahoo Finance prices
+
 ## SnapTrade Tools (Brokerage Integration)
 - snaptrade_register_user: Register a new user for brokerage connections
 - snaptrade_get_connection_url: Get URL for user to connect brokerage accounts
 - snaptrade_list_accounts: List all connected brokerage accounts
 - snaptrade_get_holdings: Get holdings for a specific account
-- snaptrade_list_all_holdings: Get all holdings across accounts with live Yahoo Finance prices
 - snaptrade_get_transactions: Get transaction history
 - snaptrade_disconnect_account: Remove a brokerage connection
 - snaptrade_refresh_account: Trigger manual refresh of holdings data
@@ -88,6 +93,16 @@ For tracking private equity, real estate, and other investments not in connected
 - manual_get_portfolio: Get portfolio with live prices from Yahoo Finance
 
 For private companies like SpaceX, use secondary market tickers (e.g., STRB for Starbase) or set a manual_price.
+
+## Cache Management Tools
+Data is cached in Redis to reduce API calls and improve response times:
+- refresh_cache: Force refresh cached data (prices, fx rates, holdings, or all)
+- get_cache_status: Check cache health, last refresh times, and tracked symbols
+
+Cache refresh schedules:
+- Stock prices: Every 5 minutes
+- FX rates: Every 5 minutes
+- Holdings: Daily at 6 AM UTC
 """,
 )
 
@@ -896,44 +911,98 @@ def snaptrade_get_holdings(
         }, indent=2)
 
 
-def _get_live_price(symbol: str) -> dict:
+def _get_live_price(symbol: str, use_cache: bool = True) -> dict:
     """
-    Helper to fetch live price from Yahoo Finance for a symbol.
+    Helper to fetch live price for a symbol.
+    Checks cache first, then falls back to Yahoo Finance API.
     Returns dict with price info or error.
     """
+    # Try cache first
+    if use_cache:
+        cached = cache.get_cached_price(symbol)
+        if cached and cached.get("price") is not None:
+            return {
+                "price": cached["price"],
+                "source": "cache",
+                "currency": cached.get("currency"),
+                "name": cached.get("name"),
+                "cached_at": cached.get("cached_at")
+            }
+
+    # Fallback to API
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info
         price = info.get("regularMarketPrice")
         if price is not None:
-            return {
+            result = {
                 "price": price,
                 "source": "yahoo_finance",
                 "currency": info.get("currency"),
                 "name": info.get("shortName") or info.get("longName")
             }
+
+            # Cache the price and track the symbol
+            price_data = {
+                "price": price,
+                "currency": info.get("currency"),
+                "name": info.get("shortName") or info.get("longName"),
+                "bid": info.get("bid"),
+                "ask": info.get("ask"),
+                "day_high": info.get("dayHigh"),
+                "day_low": info.get("dayLow"),
+                "source": "yahoo_finance"
+            }
+            cache.cache_price(symbol, price_data)
+            cache.add_symbol(symbol)
+
+            return result
         return {"price": None, "source": "unavailable", "error": f"No price for {symbol}"}
     except Exception as e:
         return {"price": None, "source": "error", "error": str(e)}
 
 
-def _get_fx_rate_cached(from_currency: str, to_currency: str, cache: dict) -> Optional[float]:
+def _get_fx_rate_cached(from_currency: str, to_currency: str, local_cache: dict) -> Optional[float]:
     """
     Helper to get FX rate with caching to avoid repeated API calls.
+    Uses Redis cache first, then local in-memory cache, then API.
     """
     if from_currency == to_currency:
         return 1.0
 
     cache_key = f"{from_currency}_{to_currency}"
-    if cache_key in cache:
-        return cache[cache_key]
 
+    # Check local in-memory cache (for within-request caching)
+    if cache_key in local_cache:
+        return local_cache[cache_key]
+
+    # Check Redis cache
+    cached = cache.get_cached_fx_rate(from_currency, to_currency)
+    if cached and cached.get("rate") is not None:
+        rate = cached["rate"]
+        local_cache[cache_key] = rate
+        return rate
+
+    # Fallback to API
     try:
         ticker_symbol = f"{from_currency.upper()}{to_currency.upper()}=X"
         ticker = yf.Ticker(ticker_symbol)
-        rate = ticker.info.get("regularMarketPrice")
+        info = ticker.info
+        rate = info.get("regularMarketPrice")
         if rate:
-            cache[cache_key] = rate
+            local_cache[cache_key] = rate
+
+            # Cache in Redis
+            rate_data = {
+                "rate": rate,
+                "bid": info.get("bid"),
+                "ask": info.get("ask"),
+                "day_high": info.get("dayHigh"),
+                "day_low": info.get("dayLow"),
+                "source": "yahoo_finance"
+            }
+            cache.cache_fx_rate(from_currency, to_currency, rate_data)
+
             return rate
     except:
         pass
@@ -942,15 +1011,23 @@ def _get_fx_rate_cached(from_currency: str, to_currency: str, cache: dict) -> Op
 
 
 @yfinance_server.tool()
-def snaptrade_list_all_holdings(
+def list_all_holdings(
     user_id: Optional[str] = None,
     user_secret: Optional[str] = None,
     target_currency: Optional[str] = None
 ) -> str:
     """
-    Get holdings for ALL connected brokerage accounts with live prices from Yahoo Finance.
+    Get all holdings from both SnapTrade brokerage accounts AND manual portfolios.
 
-    This tool fetches holdings from all connected brokerages and enriches them with:
+    This unified tool combines:
+    - SnapTrade brokerage holdings (stocks, ETFs, options from connected brokerages)
+    - Manual portfolio holdings (private equity, real estate, alternative investments)
+
+    Each account/portfolio includes a "source" field indicating its origin:
+    - "snaptrade" for brokerage accounts
+    - "manual" for manual portfolios
+
+    All positions are enriched with:
     - Live prices from Yahoo Finance (more current than brokerage data)
     - Currency conversion to a target currency (optional)
     - Calculated market values and P&L
@@ -962,38 +1039,36 @@ def snaptrade_list_all_holdings(
                         If not provided, values are shown in their original currencies.
 
     Returns:
-        JSON string containing all accounts with enriched holdings including live prices
+        JSON string containing all accounts and portfolios with enriched holdings
     """
-    if not snaptrade_client:
-        return json.dumps({
-            "error": "SnapTrade not configured"
-        })
-
     try:
-        user_id = user_id or os.getenv("SNAPTRADE_USER_ID")
-        user_secret = user_secret or os.getenv("SNAPTRADE_USER_SECRET")
-
-        if not user_id or not user_secret:
-            return json.dumps({
-                "error": "Credentials required"
-            })
-
-        # Step 1: Get all accounts
-        accounts_response = snaptrade_client.account_information.list_user_accounts(
-            user_id=user_id,
-            user_secret=user_secret
-        )
-        accounts = accounts_response.body if hasattr(accounts_response, 'body') else accounts_response
-
         # FX rate cache to avoid repeated lookups
         fx_cache = {}
         fx_rates_used = {}
 
-        # Step 2: Get holdings for each account
         all_holdings = []
         total_value_by_currency = {}
         total_value_converted = 0.0 if target_currency else None
 
+        # Step 1: Get SnapTrade accounts (if configured)
+        snaptrade_available = False
+        if snaptrade_client:
+            user_id = user_id or os.getenv("SNAPTRADE_USER_ID")
+            user_secret = user_secret or os.getenv("SNAPTRADE_USER_SECRET")
+
+            if user_id and user_secret:
+                snaptrade_available = True
+                accounts_response = snaptrade_client.account_information.list_user_accounts(
+                    user_id=user_id,
+                    user_secret=user_secret
+                )
+                accounts = accounts_response.body if hasattr(accounts_response, 'body') else accounts_response
+            else:
+                accounts = []
+        else:
+            accounts = []
+
+        # Step 2: Get holdings for each SnapTrade account
         for account in accounts:
             if hasattr(account, 'to_dict'):
                 account = account.to_dict()
@@ -1010,13 +1085,34 @@ def snaptrade_list_all_holdings(
                 if hasattr(holdings, 'to_dict'):
                     holdings = holdings.to_dict()
 
-                # Extract balance info
-                balance = account.get("balance", {})
-                if isinstance(balance, dict) and "total" in balance:
-                    total = balance["total"]
-                    currency = total.get("currency", "USD")
-                    amount = total.get("amount", 0)
-                    total_value_by_currency[currency] = total_value_by_currency.get(currency, 0) + amount
+                # Extract detailed balance info from holdings response
+                balances_list = holdings.get("balances", [])
+                account_cash = 0.0
+                account_buying_power = 0.0
+                account_currency = None
+
+                for bal in balances_list:
+                    if hasattr(bal, 'to_dict'):
+                        bal = bal.to_dict()
+                    bal_currency = bal.get("currency", {})
+                    if hasattr(bal_currency, 'to_dict'):
+                        bal_currency = bal_currency.to_dict()
+                    currency_code = bal_currency.get("code") if isinstance(bal_currency, dict) else None
+
+                    cash_val = bal.get("cash") or 0
+                    buying_power_val = bal.get("buying_power") or 0
+
+                    account_cash += cash_val
+                    account_buying_power += buying_power_val
+                    if currency_code and not account_currency:
+                        account_currency = currency_code
+
+                # Get account type from raw_type
+                account_type = account.get("raw_type")
+
+                # Track account-level totals
+                account_total_holdings = 0.0
+                account_total_cost_basis = 0.0
 
                 # Format positions with live prices
                 positions = []
@@ -1080,6 +1176,12 @@ def snaptrade_list_all_holdings(
                         "unrealized_pnl": round(unrealized_pnl, 2) if unrealized_pnl else None,
                         "unrealized_pnl_pct": unrealized_pnl_pct
                     }
+
+                    # Accumulate account-level totals
+                    if market_value:
+                        account_total_holdings += market_value
+                    if cost_basis:
+                        account_total_cost_basis += cost_basis
 
                     # Currency conversion if target_currency specified
                     if target_currency and pos_currency and pos_currency != target_currency:
@@ -1163,6 +1265,12 @@ def snaptrade_list_all_holdings(
                         "unrealized_pnl_pct": unrealized_pnl_pct
                     }
 
+                    # Accumulate account-level totals for options
+                    if market_value:
+                        account_total_holdings += market_value
+                    if cost_basis:
+                        account_total_cost_basis += cost_basis
+
                     # Currency conversion for options
                     opt_curr = opt_data.get("currency")
                     if target_currency and opt_curr and opt_curr != target_currency:
@@ -1190,11 +1298,38 @@ def snaptrade_list_all_holdings(
                 if target_currency and total_value_converted is not None:
                     total_value_converted += account_value_converted
 
+                # Calculate account-level P&L
+                account_total_value = account_cash + account_total_holdings
+                account_unrealized_pnl = account_total_holdings - account_total_cost_basis if account_total_cost_basis > 0 else None
+                account_unrealized_pnl_pct = round((account_unrealized_pnl / account_total_cost_basis) * 100, 2) if account_unrealized_pnl is not None and account_total_cost_basis > 0 else None
+
+                # Calculate margin used (if buying_power differs from cash)
+                margin_used = None
+                if account_buying_power and account_cash:
+                    # If buying_power > cash, there's available margin
+                    # If total_holdings > buying_power, margin is being used
+                    if account_total_holdings > account_buying_power:
+                        margin_used = round(account_total_holdings - account_buying_power, 2)
+
+                # Update global totals
+                if account_currency:
+                    total_value_by_currency[account_currency] = total_value_by_currency.get(account_currency, 0) + account_total_value
+
                 all_holdings.append({
+                    "source": "snaptrade",
                     "account_id": account_id,
                     "name": account.get("name"),
                     "institution": account.get("institution_name"),
-                    "balance": balance,
+                    "account_type": account_type,
+                    "currency": account_currency,
+                    "total_value": round(account_total_value, 2),
+                    "total_cash": round(account_cash, 2),
+                    "total_holdings": round(account_total_holdings, 2),
+                    "total_cost_basis": round(account_total_cost_basis, 2),
+                    "total_unrealized_pnl": round(account_unrealized_pnl, 2) if account_unrealized_pnl is not None else None,
+                    "total_unrealized_pnl_pct": account_unrealized_pnl_pct,
+                    "buying_power": round(account_buying_power, 2) if account_buying_power else None,
+                    "margin_used": margin_used,
                     "positions_count": len(positions),
                     "positions": positions,
                     "option_positions_count": len(option_positions),
@@ -1203,15 +1338,144 @@ def snaptrade_list_all_holdings(
 
             except Exception as e:
                 all_holdings.append({
+                    "source": "snaptrade",
                     "account_id": account_id,
                     "name": account.get("name"),
                     "institution": account.get("institution_name"),
                     "error": str(e)
                 })
 
+        snaptrade_accounts_count = len(all_holdings)
+
+        # Step 3: Fetch and append manual portfolios
+        manual_portfolios_count = 0
+        try:
+            portfolios_data = _load_portfolios()
+            for portfolio_id, portfolio in portfolios_data.get("portfolios", {}).items():
+                manual_portfolios_count += 1
+                portfolio_value_converted = 0.0
+
+                # Track portfolio-level totals
+                portfolio_total_holdings = 0.0
+                portfolio_total_cost_basis = 0.0
+                portfolio_currency = None
+
+                positions_with_prices = []
+                for pos in portfolio.get("positions", []):
+                    symbol = pos.get("symbol")
+                    units = pos.get("units", 0)
+                    average_cost = pos.get("average_cost", 0)
+                    pos_currency = pos.get("currency", "USD")
+                    manual_price = pos.get("manual_price")
+
+                    # Get price: try Yahoo Finance first, then manual_price
+                    live_price = None
+                    price_source = "none"
+
+                    if symbol:
+                        live_data = _get_live_price(symbol)
+                        if live_data.get("price") is not None:
+                            live_price = live_data["price"]
+                            price_source = "yahoo_finance"
+
+                    if live_price is None and manual_price is not None:
+                        live_price = manual_price
+                        price_source = "manual"
+
+                    # Calculate values
+                    cost_basis = units * average_cost if units and average_cost else 0
+                    market_value = units * live_price if units and live_price else None
+
+                    unrealized_pnl = None
+                    unrealized_pnl_pct = None
+                    if market_value is not None and cost_basis > 0:
+                        unrealized_pnl = market_value - cost_basis
+                        unrealized_pnl_pct = round((unrealized_pnl / cost_basis) * 100, 2)
+
+                    pos_data = {
+                        "id": pos.get("id"),
+                        "name": pos.get("name"),
+                        "symbol": symbol,
+                        "units": units,
+                        "currency": pos_currency,
+                        "live_price": round(live_price, 2) if live_price else None,
+                        "price_source": price_source,
+                        "market_value": round(market_value, 2) if market_value else None,
+                        "average_cost": average_cost,
+                        "cost_basis": round(cost_basis, 2) if cost_basis else None,
+                        "unrealized_pnl": round(unrealized_pnl, 2) if unrealized_pnl else None,
+                        "unrealized_pnl_pct": unrealized_pnl_pct,
+                        "asset_type": pos.get("asset_type"),
+                        "notes": pos.get("notes")
+                    }
+
+                    # Accumulate portfolio-level totals
+                    if market_value:
+                        portfolio_total_holdings += market_value
+                    if cost_basis:
+                        portfolio_total_cost_basis += cost_basis
+                    if not portfolio_currency:
+                        portfolio_currency = pos_currency
+
+                    # Track totals by currency
+                    if market_value:
+                        total_value_by_currency[pos_currency] = total_value_by_currency.get(pos_currency, 0) + market_value
+
+                    # Currency conversion if target_currency specified
+                    if target_currency and pos_currency and pos_currency != target_currency:
+                        fx_rate = _get_fx_rate_cached(pos_currency, target_currency, fx_cache)
+                        if fx_rate:
+                            fx_key = f"{pos_currency}_{target_currency}"
+                            fx_rates_used[fx_key] = fx_rate
+
+                            pos_data["converted"] = {
+                                "currency": target_currency,
+                                "fx_rate": fx_rate,
+                                "live_price": round(live_price * fx_rate, 2) if live_price else None,
+                                "market_value": round(market_value * fx_rate, 2) if market_value else None,
+                                "cost_basis": round(cost_basis * fx_rate, 2) if cost_basis else None,
+                                "unrealized_pnl": round(unrealized_pnl * fx_rate, 2) if unrealized_pnl else None,
+                                "unrealized_pnl_pct": unrealized_pnl_pct
+                            }
+                            if market_value:
+                                portfolio_value_converted += market_value * fx_rate
+                    elif target_currency and pos_currency == target_currency:
+                        if market_value:
+                            portfolio_value_converted += market_value
+
+                    positions_with_prices.append(pos_data)
+
+                if target_currency and total_value_converted is not None:
+                    total_value_converted += portfolio_value_converted
+
+                # Calculate portfolio-level P&L (manual portfolios have no cash)
+                portfolio_unrealized_pnl = portfolio_total_holdings - portfolio_total_cost_basis if portfolio_total_cost_basis > 0 else None
+                portfolio_unrealized_pnl_pct = round((portfolio_unrealized_pnl / portfolio_total_cost_basis) * 100, 2) if portfolio_unrealized_pnl is not None and portfolio_total_cost_basis > 0 else None
+
+                all_holdings.append({
+                    "source": "manual",
+                    "portfolio_id": portfolio_id,
+                    "name": portfolio.get("name"),
+                    "description": portfolio.get("description"),
+                    "currency": portfolio_currency,
+                    "total_value": round(portfolio_total_holdings, 2),
+                    "total_cash": 0,
+                    "total_holdings": round(portfolio_total_holdings, 2),
+                    "total_cost_basis": round(portfolio_total_cost_basis, 2),
+                    "total_unrealized_pnl": round(portfolio_unrealized_pnl, 2) if portfolio_unrealized_pnl is not None else None,
+                    "total_unrealized_pnl_pct": portfolio_unrealized_pnl_pct,
+                    "positions_count": len(positions_with_prices),
+                    "positions": positions_with_prices
+                })
+        except Exception as e:
+            # If manual portfolios fail to load, continue with just SnapTrade data
+            pass
+
         result = {
             "success": True,
             "accounts_count": len(all_holdings),
+            "snaptrade_accounts_count": snaptrade_accounts_count,
+            "manual_portfolios_count": manual_portfolios_count,
             "total_value_by_currency": total_value_by_currency,
             "accounts": all_holdings
         }
@@ -1989,31 +2253,124 @@ def manual_get_portfolio(
         }, indent=2)
 
 
+# ============================================================================
+# Cache Control Tools
+# ============================================================================
+
+@yfinance_server.tool()
+def refresh_cache(
+    data_type: str = "all",
+    user_id: Optional[str] = None,
+    user_secret: Optional[str] = None
+) -> str:
+    """
+    Force refresh cached data.
+
+    Manually triggers a refresh of cached data. Useful when you need
+    the latest data immediately rather than waiting for scheduled refresh.
+
+    Args:
+        data_type: Type of data to refresh. Options:
+                   - "prices" - Refresh stock prices for all tracked symbols
+                   - "fx" - Refresh FX rates for common currency pairs
+                   - "holdings" - Refresh brokerage holdings from SnapTrade
+                   - "all" - Refresh everything (default)
+        user_id: SnapTrade user ID (required for 'holdings' or 'all', uses env var if not provided)
+        user_secret: SnapTrade user secret (required for 'holdings' or 'all', uses env var if not provided)
+
+    Returns:
+        JSON string with refresh status and counts
+    """
+    try:
+        if data_type == "prices":
+            result = refresh.refresh_all_prices()
+        elif data_type == "fx":
+            result = refresh.refresh_fx_rates()
+        elif data_type == "holdings":
+            result = refresh.refresh_all_holdings(user_id, user_secret)
+        elif data_type == "all":
+            result = refresh.refresh_all(user_id, user_secret)
+        else:
+            return json.dumps({
+                "error": f"Invalid data_type: {data_type}",
+                "valid_options": ["prices", "fx", "holdings", "all"]
+            }, indent=2)
+
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "error": str(e)
+        }, indent=2)
+
+
+@yfinance_server.tool()
+def get_cache_status() -> str:
+    """
+    Get cache status and health information.
+
+    Returns information about:
+    - Whether cache is available
+    - Last refresh times for each data type
+    - Number of tracked symbols
+    - Background scheduler status
+
+    Use this to verify cache is working and data is fresh.
+
+    Returns:
+        JSON string with cache status information
+    """
+    try:
+        status = cache.get_cache_status()
+        status["scheduler"] = refresh.get_scheduler_status()
+
+        return json.dumps(status, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "error": str(e)
+        }, indent=2)
+
+
 if __name__ == "__main__":
     # For local testing, use stdio
     # For remote deployment, use HTTP transport
     import os
-    
+
     # Check if we're running in Fly.io or remote environment
     if os.getenv("FLY_APP_NAME") or os.getenv("PORT"):
         # Remote deployment - use HTTP
         port = int(os.getenv("PORT", "8080"))
         print(f"Starting SuperFinance MCP server on HTTP at 0.0.0.0:{port}")
-        
+
+        # Start background scheduler for cache refresh if cache is available
+        if cache.is_cache_available():
+            print("Redis cache available, starting background scheduler...")
+            refresh.start_scheduler()
+        else:
+            print("Redis cache not available, background refresh disabled")
+
         # Create the MCP app
         app = yfinance_server.http_app()
-        
+
         # Add a simple health check endpoint for Fly.io
         from starlette.responses import JSONResponse
         from starlette.routing import Route
-        
+
         async def health_check(request):
-            return JSONResponse({"status": "ok", "service": "superfinance-mcp"})
-        
+            cache_status = "ok" if cache.is_cache_available() else "unavailable"
+            scheduler_status = refresh.get_scheduler_status()
+            return JSONResponse({
+                "status": "ok",
+                "service": "superfinance-mcp",
+                "cache": cache_status,
+                "scheduler": scheduler_status
+            })
+
         # Add health check route
         app.routes.insert(0, Route("/", health_check))
         app.routes.insert(1, Route("/health", health_check))
-        
+
         # Run with uvicorn
         import uvicorn
         uvicorn.run(app, host="0.0.0.0", port=port)

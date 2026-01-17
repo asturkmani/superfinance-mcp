@@ -5,6 +5,18 @@ primary_region = 'ams'
 
 [env]
   SUPERFINANCE_PORTFOLIO_FILE = "/data/portfolios.json"
+  # Cache TTL configuration (in seconds)
+  CACHE_HOLDINGS_TTL = "90000"      # 25 hours
+  CACHE_PRICES_TTL = "600"          # 10 minutes
+  CACHE_FX_TTL = "600"              # 10 minutes
+  CACHE_ACCOUNTS_TTL = "90000"      # 25 hours
+  # Refresh intervals (in seconds)
+  REFRESH_PRICES_INTERVAL = "300"   # 5 minutes
+  REFRESH_FX_INTERVAL = "300"       # 5 minutes
+
+# NOTE: Upstash Redis credentials must be set as secrets:
+#   fly secrets set UPSTASH_REDIS_REST_URL=https://xxx.upstash.io
+#   fly secrets set UPSTASH_REDIS_REST_TOKEN=AXxx...
 
 [mounts]
   source = "superfinance_data"
@@ -17,6 +29,15 @@ primary_region = 'ams'
   auto_start_machines = true
   min_machines_running = 0
   processes = ["app"]
+
+# Health check to keep the machine alive for background refresh
+# Fly.io will ping this endpoint, which triggers auto_start if machine is stopped
+[[http_service.checks]]
+  interval = "300s"    # 5 minutes - keeps scheduler running
+  timeout = "10s"
+  grace_period = "30s"
+  method = "GET"
+  path = "/health"
 
 [[vm]]
   memory = '1gb'

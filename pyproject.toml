@@ -9,6 +9,9 @@ dependencies = [
     "yfinance>=0.2.62",
     "uvicorn>=0.30.0",
     "snaptrade-python-sdk>=11.0.154",
+    "upstash-redis>=1.0.0",
+    "apscheduler>=3.10.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
