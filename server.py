@@ -2,6 +2,8 @@ import argparse
 import json
 import math
 import os
+import uuid
+from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 from io import StringIO
@@ -1473,7 +1475,6 @@ def _save_portfolios(data: dict) -> None:
 
 def _generate_position_id() -> str:
     """Generate a unique position ID."""
-    import uuid
     return str(uuid.uuid4())[:8]
 
 
@@ -1509,7 +1510,6 @@ def manual_create_portfolio(
                 "message": "Use a different portfolio_id or delete the existing one first"
             }, indent=2)
 
-        from datetime import datetime
         data["portfolios"][portfolio_id] = {
             "name": name,
             "description": description,
@@ -1575,7 +1575,6 @@ def manual_add_position(
                 "message": "Create the portfolio first using manual_create_portfolio"
             }, indent=2)
 
-        from datetime import datetime
         position_id = _generate_position_id()
 
         position = {
@@ -1663,8 +1662,6 @@ def manual_update_position(
                 "error": f"Position '{position_id}' not found in portfolio '{portfolio_id}'"
             }, indent=2)
 
-        from datetime import datetime
-
         # Update only provided fields
         if units is not None:
             position["units"] = units
@@ -1733,7 +1730,6 @@ def manual_remove_position(
                 "error": f"Position '{position_id}' not found in portfolio '{portfolio_id}'"
             }, indent=2)
 
-        from datetime import datetime
         portfolio["updated_at"] = datetime.utcnow().isoformat() + "Z"
 
         _save_portfolios(data)
