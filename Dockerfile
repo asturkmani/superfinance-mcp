@@ -19,6 +19,8 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 
 # Copy application code
 COPY server.py ./
+COPY cache.py ./
+COPY refresh.py ./
 COPY README.md ./
 COPY pyproject.toml ./
 
