@@ -103,8 +103,7 @@ def register_chart_tools(server):
 
     @server.tool()
     def portfolio_composition_chart(
-        source: str = "all",
-        portfolio_id: Optional[str] = None,
+        include: str = "all",
         group_by: str = "holding",
         chart_type: str = "donut",
         theme: str = "dark",
@@ -117,9 +116,8 @@ def register_chart_tools(server):
         Data is fetched from your connected brokerage accounts and/or manual portfolios.
 
         Args:
-            source: "snaptrade" (brokerage only), "manual" (manual portfolios only), or "all" (both)
-            portfolio_id: Specific manual portfolio ID (optional, only used when source includes "manual")
-            group_by: How to group data - "holding" (by ticker/name), "sector", or "asset_type"
+            include: What to include - "all", "stocks", "options", "private", or comma-separated combo (e.g., "stocks,options")
+            group_by: How to group data - "holding" (by ticker/name), "type" (stocks/options/private), or "asset_type"
             chart_type: "pie" or "donut"
             theme: "dark" or "light"
             reporting_currency: Currency for value conversion (e.g., "USD", "GBP"). Uses native currencies if not specified.
@@ -127,17 +125,24 @@ def register_chart_tools(server):
         Returns:
             JSON with chart URL and metadata
         """
-        # Validate inputs
-        if source not in ["snaptrade", "manual", "all"]:
-            return json.dumps({
-                "error": f"Invalid source '{source}'",
-                "valid_sources": ["snaptrade", "manual", "all"]
-            })
+        # Parse include filter
+        valid_types = {"all", "stocks", "options", "private"}
+        include_types = set()
+        for t in include.lower().split(","):
+            t = t.strip()
+            if t in valid_types:
+                include_types.add(t)
 
-        if group_by not in ["holding", "sector", "asset_type"]:
+        if not include_types:
+            include_types = {"all"}
+
+        if "all" in include_types:
+            include_types = {"stocks", "options", "private"}
+
+        if group_by not in ["holding", "type", "asset_type"]:
             return json.dumps({
                 "error": f"Invalid group_by '{group_by}'",
-                "valid_options": ["holding", "sector", "asset_type"]
+                "valid_options": ["holding", "type", "asset_type"]
             })
 
         if chart_type not in ["pie", "donut"]:
@@ -151,35 +156,36 @@ def register_chart_tools(server):
         fx_cache = {}
 
         try:
-            # Get SnapTrade holdings if requested
-            if source in ["snaptrade", "all"]:
-                snaptrade_client = get_snaptrade_client()
-                if snaptrade_client:
-                    user_id = os.getenv("SNAPTRADE_USER_ID")
-                    user_secret = os.getenv("SNAPTRADE_USER_SECRET")
+            # Get SnapTrade holdings
+            snaptrade_client = get_snaptrade_client()
+            if snaptrade_client:
+                user_id = os.getenv("SNAPTRADE_USER_ID")
+                user_secret = os.getenv("SNAPTRADE_USER_SECRET")
 
-                    if user_id and user_secret:
-                        accounts = snaptrade_client.account_information.list_user_accounts(
-                            user_id=user_id, user_secret=user_secret
-                        )
-                        accounts = accounts.body if hasattr(accounts, 'body') else accounts
+                if user_id and user_secret:
+                    accounts = snaptrade_client.account_information.list_user_accounts(
+                        user_id=user_id, user_secret=user_secret
+                    )
+                    accounts = accounts.body if hasattr(accounts, 'body') else accounts
 
-                        for account in accounts:
-                            if hasattr(account, 'to_dict'):
-                                account = account.to_dict()
+                    for account in accounts:
+                        if hasattr(account, 'to_dict'):
+                            account = account.to_dict()
 
-                            account_id = account.get("id")
-                            if not account_id:
-                                continue
+                        account_id = account.get("id")
+                        if not account_id:
+                            continue
 
-                            try:
-                                holdings = snaptrade_client.account_information.get_user_holdings(
-                                    account_id=account_id, user_id=user_id, user_secret=user_secret
-                                )
-                                holdings = holdings.body if hasattr(holdings, 'body') else holdings
-                                if hasattr(holdings, 'to_dict'):
-                                    holdings = holdings.to_dict()
+                        try:
+                            holdings = snaptrade_client.account_information.get_user_holdings(
+                                account_id=account_id, user_id=user_id, user_secret=user_secret
+                            )
+                            holdings = holdings.body if hasattr(holdings, 'body') else holdings
+                            if hasattr(holdings, 'to_dict'):
+                                holdings = holdings.to_dict()
 
+                            # Process stock positions
+                            if "stocks" in include_types:
                                 for pos in holdings.get("positions", []):
                                     if hasattr(pos, 'to_dict'):
                                         pos = pos.to_dict()
@@ -220,30 +226,70 @@ def register_chart_tools(server):
                                         holdings_data.append({
                                             "label": ticker or desc or "Unknown",
                                             "value": market_value,
-                                            "source": "snaptrade",
+                                            "type": "Stocks",
                                             "asset_type": "stock",
-                                            "sector": None,  # Would need additional API call to get sector
                                         })
 
-                            except Exception:
-                                continue
+                            # Process options positions
+                            if "options" in include_types:
+                                for opt in holdings.get("option_positions", []):
+                                    if hasattr(opt, 'to_dict'):
+                                        opt = opt.to_dict()
 
-            # Get manual portfolios if requested
-            if source in ["manual", "all"]:
+                                    sym_wrap = opt.get("symbol", {})
+                                    if hasattr(sym_wrap, 'to_dict'):
+                                        sym_wrap = sym_wrap.to_dict()
+                                    opt_sym = sym_wrap.get("option_symbol", {})
+                                    if hasattr(opt_sym, 'to_dict'):
+                                        opt_sym = opt_sym.to_dict()
+                                    underlying = opt_sym.get("underlying_symbol", {})
+                                    if hasattr(underlying, 'to_dict'):
+                                        underlying = underlying.to_dict()
+                                    curr_obj = underlying.get("currency", {})
+                                    if hasattr(curr_obj, 'to_dict'):
+                                        curr_obj = curr_obj.to_dict()
+                                    curr = curr_obj.get("code") if isinstance(curr_obj, dict) else None
+
+                                    units = opt.get("units") or 0
+                                    price = opt.get("price") or 0
+                                    multiplier = 100 if not opt_sym.get("is_mini_option") else 10
+
+                                    market_value = abs(units * price * multiplier) if price and units else 0
+
+                                    # Convert to reporting currency if specified
+                                    if reporting_currency and curr and curr != reporting_currency and market_value:
+                                        fx = get_fx_rate_cached(curr, reporting_currency, fx_cache)
+                                        if fx:
+                                            market_value = market_value * fx
+
+                                    if market_value > 0:
+                                        opt_type = opt_sym.get("option_type", "").upper()
+                                        underlying_sym = underlying.get("symbol", "???")
+                                        strike = opt_sym.get("strike_price", "")
+                                        label = f"{underlying_sym} {strike}{opt_type[0] if opt_type else ''}"
+
+                                        holdings_data.append({
+                                            "label": label,
+                                            "value": market_value,
+                                            "type": "Options",
+                                            "asset_type": "option",
+                                        })
+
+                        except Exception:
+                            continue
+
+            # Get manual portfolios (private investments)
+            if "private" in include_types:
                 portfolios = load_portfolios()
 
                 for pid, portfolio in portfolios.get("portfolios", {}).items():
-                    # Filter by portfolio_id if specified
-                    if portfolio_id and pid != portfolio_id:
-                        continue
-
                     for pos in portfolio.get("positions", []):
                         symbol = pos.get("symbol")
                         name = pos.get("name")
                         units = pos.get("units", 0)
                         curr = pos.get("currency", "USD")
                         manual_price = pos.get("manual_price")
-                        asset_type = pos.get("asset_type", "other")
+                        asset_type = pos.get("asset_type", "private")
 
                         # Get live price
                         price = None
@@ -267,9 +313,8 @@ def register_chart_tools(server):
                             holdings_data.append({
                                 "label": symbol or name or "Unknown",
                                 "value": market_value,
-                                "source": "manual",
+                                "type": "Private",
                                 "asset_type": asset_type,
-                                "sector": None,
                             })
 
         except Exception as e:
@@ -284,28 +329,17 @@ def register_chart_tools(server):
         # Group data based on group_by parameter
         grouped = {}
         if group_by == "holding":
-            # Group by ticker/name (combine duplicate tickers)
             for item in holdings_data:
                 label = item["label"]
-                if label in grouped:
-                    grouped[label] += item["value"]
-                else:
-                    grouped[label] = item["value"]
+                grouped[label] = grouped.get(label, 0) + item["value"]
+        elif group_by == "type":
+            for item in holdings_data:
+                pos_type = item.get("type", "Other")
+                grouped[pos_type] = grouped.get(pos_type, 0) + item["value"]
         elif group_by == "asset_type":
             for item in holdings_data:
-                asset_type = item.get("asset_type") or "other"
-                if asset_type in grouped:
-                    grouped[asset_type] += item["value"]
-                else:
-                    grouped[asset_type] = item["value"]
-        elif group_by == "sector":
-            # Group by sector (if available, otherwise use "Unknown")
-            for item in holdings_data:
-                sector = item.get("sector") or "Unknown"
-                if sector in grouped:
-                    grouped[sector] += item["value"]
-                else:
-                    grouped[sector] = item["value"]
+                asset_type = item.get("asset_type", "other")
+                grouped[asset_type] = grouped.get(asset_type, 0) + item["value"]
 
         # Convert to chart data format and sort by value descending
         chart_data = [
@@ -315,12 +349,13 @@ def register_chart_tools(server):
 
         # Generate title
         currency_suffix = f" ({reporting_currency})" if reporting_currency else ""
+        include_str = ", ".join(sorted(include_types))
         if group_by == "holding":
             title = f"Portfolio Holdings{currency_suffix}"
-        elif group_by == "asset_type":
-            title = f"Portfolio by Asset Type{currency_suffix}"
+        elif group_by == "type":
+            title = f"Portfolio by Type{currency_suffix}"
         else:
-            title = f"Portfolio by Sector{currency_suffix}"
+            title = f"Portfolio by Asset Type{currency_suffix}"
 
         # Generate chart HTML
         html = generate_chartjs_pie_html(
@@ -351,7 +386,7 @@ def register_chart_tools(server):
         return json.dumps({
             "success": True,
             "url": chart_url,
-            "source": source,
+            "include": list(include_types),
             "group_by": group_by,
             "chart_type": chart_type,
             "theme": theme,

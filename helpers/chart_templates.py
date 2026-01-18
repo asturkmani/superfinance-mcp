@@ -158,7 +158,7 @@ def generate_chartjs_pie_html(
 <html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>{title}</title>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <style>
@@ -185,6 +185,7 @@ def generate_chartjs_pie_html(
     <script>
         const chart = echarts.init(document.getElementById('chart'), '{theme}');
         const total = {total};
+        const isMobile = window.innerWidth < 768;
 
         const option = {{
             backgroundColor: '{bg_color}',
@@ -225,22 +226,24 @@ def generate_chartjs_pie_html(
             }},
             legend: {{
                 type: 'scroll',
-                orient: 'vertical',
-                right: 30,
-                top: 'middle',
-                itemWidth: 14,
-                itemHeight: 14,
-                itemGap: 12,
+                orient: isMobile ? 'horizontal' : 'vertical',
+                right: isMobile ? 'center' : 30,
+                left: isMobile ? 'center' : 'auto',
+                top: isMobile ? 'auto' : 'middle',
+                bottom: isMobile ? 15 : 'auto',
+                itemWidth: 12,
+                itemHeight: 12,
+                itemGap: isMobile ? 8 : 12,
                 textStyle: {{
                     color: '{text_color}',
-                    fontSize: 13,
+                    fontSize: isMobile ? 11 : 13,
                     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
                 }},
                 formatter: function(name) {{
                     const item = {chart_data_json}.find(d => d.name === name);
                     if (item) {{
                         const pct = ((item.value / total) * 100).toFixed(1);
-                        return name + '  ' + pct + '%';
+                        return isMobile ? name : name + '  ' + pct + '%';
                     }}
                     return name;
                 }},
@@ -253,8 +256,8 @@ def generate_chartjs_pie_html(
                 {{
                     name: 'Holdings',
                     type: 'pie',
-                    radius: {radius},
-                    center: ['40%', '55%'],
+                    radius: isMobile ? ['35%', '65%'] : {radius},
+                    center: isMobile ? ['50%', '45%'] : ['40%', '55%'],
                     avoidLabelOverlap: true,
                     itemStyle: {{
                         borderRadius: 6,
@@ -265,25 +268,19 @@ def generate_chartjs_pie_html(
                     }},
                     label: {{
                         show: true,
-                        position: 'outside',
-                        color: '{text_color}',
-                        fontSize: 12,
-                        fontWeight: 500,
+                        position: 'inside',
+                        color: '#ffffff',
+                        fontSize: 13,
+                        fontWeight: 600,
                         formatter: function(params) {{
-                            if (params.percent < 5) return '';
-                            return params.name;
+                            if (params.percent < 6) return '';
+                            return params.percent.toFixed(1) + '%';
                         }},
-                        distanceToLabelLine: 5
+                        textShadowColor: 'rgba(0, 0, 0, 0.5)',
+                        textShadowBlur: 4
                     }},
                     labelLine: {{
-                        show: true,
-                        length: 15,
-                        length2: 10,
-                        smooth: true,
-                        lineStyle: {{
-                            color: '{subtitle_color}',
-                            width: 1
-                        }}
+                        show: false
                     }},
                     emphasis: {{
                         scale: true,
@@ -294,8 +291,11 @@ def generate_chartjs_pie_html(
                         }},
                         label: {{
                             show: true,
-                            fontSize: 14,
-                            fontWeight: 600
+                            fontSize: 15,
+                            fontWeight: 700,
+                            formatter: function(params) {{
+                                return params.name + '\\n' + params.percent.toFixed(1) + '%';
+                            }}
                         }}
                     }},
                     data: {chart_data_json},
