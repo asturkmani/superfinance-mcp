@@ -747,7 +747,7 @@ def generate_portfolio_page_html(
                 itemStyle: {{ color: colors[i % colors.length] }}
             }}));
 
-            // Get tickers that belong to a group
+            // Get tickers that belong to a group with their values
             function getTickersForGroup(groupBy, groupName) {{
                 if (groupBy === 'ticker') return [];
                 const fieldMap = {{
@@ -759,8 +759,8 @@ def generate_portfolio_page_html(
                 if (!field) return [];
                 return holdings
                     .filter(h => h[field] === groupName)
-                    .map(h => h.ticker_label)
-                    .sort();
+                    .map(h => ({{ label: h.ticker_label, value: h.value }}))
+                    .sort((a, b) => b.value - a.value);
             }}
 
             const commonTooltip = {{
@@ -783,7 +783,8 @@ def generate_portfolio_page_html(
                     // Add ticker breakdown for grouped views
                     const tickers = getTickersForGroup(currentGroupBy, params.name);
                     if (tickers.length > 0) {{
-                        html += '<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid {"#334155" if theme == "dark" else "#e2e8f0"}; color: {"#94a3b8" if theme == "dark" else "#64748b"}; font-size: 11px;">Tickers: <span style="color: {text_color};">' + tickers.join(', ') + '</span></div>';
+                        const tickerLines = tickers.map(t => t.label + ': ' + currencySymbol + formatNumber(t.value)).join('<br>');
+                        html += '<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid {"#334155" if theme == "dark" else "#e2e8f0"}; color: {"#94a3b8" if theme == "dark" else "#64748b"}; font-size: 11px;"><div style="margin-bottom: 4px;">Breakdown:</div><div style="color: {text_color};">' + tickerLines + '</div></div>';
                     }}
 
                     return html;
