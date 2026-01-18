@@ -22,70 +22,56 @@ yfinance_server = FastMCP(
     instructions="""
 # SuperFinance MCP Server
 
-This server provides financial data from Yahoo Finance, brokerage integration via SnapTrade, manual portfolio management for private investments, and interactive chart generation.
+Financial data, portfolio management, and visualization tools.
 
-## Yahoo Finance Tools
-- get_historical_stock_prices: Get historical OHLCV data for a ticker symbol
-- get_stock_info: Get comprehensive stock information for one or more tickers (supports comma-separated, e.g., "AAPL,MSFT,GOOG")
-- get_yahoo_finance_news: Get news for a given ticker symbol
-- get_stock_actions: Get stock dividends and stock splits
-- get_financial_statement: Get income statement, balance sheet, or cash flow
-- get_holder_info: Get major holders, institutional holders, insider transactions
-- get_option_expiration_dates: Get available options expiration dates
-- get_option_chain: Get options chain for a ticker, expiration date, and type
-- get_recommendations: Get analyst recommendations or upgrades/downgrades
-- get_fx_rate: Get current foreign exchange rate between two currencies
+## Portfolio Management (Unified)
 
-## Chart Tools
-Generate interactive charts with live data:
-- stock_chart: Generate TradingView chart for stocks (supports multiple tickers for comparison)
-- portfolio_composition_chart: Generate pie/donut chart of portfolio holdings breakdown
-- portfolio_page: Generate an interactive portfolio dashboard with:
-  - Toggle between pie chart and treemap views
-  - Group by ticker, consolidated name, category, or brokerage
-  - AI-powered category classification (Technology, Memory, Commodities, Energy, Crypto, etc.)
-  - Consolidated names for related assets (e.g., GOOG + GOOGL = "Google", PSLV + PHYS = "Silver")
+Single interface for both manual portfolios and synced brokerage accounts:
 
-Charts return URLs that expire after 24 hours. TradingView charts fetch live market data automatically.
+- list_portfolios(type): List all portfolios. Filter by "all", "manual", or "synced".
+- get_portfolio(id): Get positions in any portfolio with live prices.
+- add_portfolio(name, type): Create manual portfolio or connect brokerage (returns OAuth URL).
+- delete_portfolio(id): Delete manual portfolio or disconnect brokerage.
+- add_position(portfolio_id, symbol, units, cost): Add position to manual portfolio.
+- update_position(portfolio_id, position_id, ...): Update position in manual portfolio.
+- remove_position(portfolio_id, position_id): Remove position from manual portfolio.
+- sync_portfolio(id): Force refresh synced portfolio from brokerage.
+- get_transactions(portfolio_id, start, end): Get transaction history (synced only).
 
-## Unified Holdings
-- list_all_holdings: Get all holdings from both SnapTrade brokerage accounts AND manual portfolios with:
-  - Live Yahoo Finance prices
-  - AI-classified categories (Technology, Memory, Commodities, etc.)
-  - Consolidated names for grouping related assets
+Manual portfolios: User-managed, supports private equity (.PVT suffix), manual pricing.
+Synced portfolios: Read-only positions from connected brokerages via SnapTrade.
 
-## SnapTrade Tools (Brokerage Integration)
-- snaptrade_register_user: Register a new user for brokerage connections
-- snaptrade_get_connection_url: Get URL for user to connect brokerage accounts
-- snaptrade_list_accounts: List all connected brokerage accounts
-- snaptrade_get_holdings: Get holdings for a specific account
-- snaptrade_get_transactions: Get transaction history for a specific account (buys, sells, dividends, etc.)
-- snaptrade_get_all_transactions: Get transactions across ALL accounts in one call
-- snaptrade_disconnect_account: Remove a brokerage connection
-- snaptrade_refresh_account: Trigger manual refresh of holdings data
+## Visualization
 
-## Manual Portfolio Tools (Private Investments)
-For tracking private equity, real estate, and other investments not in connected brokerages:
-- manual_create_portfolio: Create a new portfolio for private investments
-- manual_add_position: Add a position (with optional Yahoo Finance ticker or manual price)
-- manual_update_position: Update units, cost, price, or other position details
-- manual_remove_position: Remove a position from a portfolio
-- manual_delete_portfolio: Delete an entire portfolio
-- manual_list_portfolios: List all portfolios with summary info
-- manual_get_portfolio: Get portfolio with live prices from Yahoo Finance
+Single chart() tool for all visualizations:
 
-For private companies like SpaceX, use secondary market tickers (e.g., STRB for Starbase) or set a manual_price.
+- chart(type="portfolio"): Interactive dashboard with pie/treemap toggle, groupings by ticker/name/category/brokerage.
+- chart(type="price", tickers="AAPL"): TradingView chart with live market data.
+- chart(type="price", tickers="AAPL,MSFT,GOOG"): Compare multiple tickers.
 
-## Cache Management Tools
-Data is cached in Redis to reduce API calls and improve response times:
-- refresh_cache: Force refresh cached data (prices, fx rates, holdings, or all)
-- get_cache_status: Check cache health, last refresh times, and tracked symbols
+Charts return URLs that expire after 24 hours.
 
-Cache refresh schedules:
-- Stock prices: Every 5 minutes
-- FX rates: Every 5 minutes
-- Holdings: Every 12 hours
-- Charts: Expire after 24 hours
+## Aggregate View
+
+- list_all_holdings(currency): Unified view of ALL positions from ALL sources with live prices and AI-classified categories.
+
+## Market Data (Yahoo Finance)
+
+- get_stock_info: Company info for one or more tickers (comma-separated).
+- get_historical_stock_prices: Historical OHLCV data.
+- get_fx_rate: Currency exchange rates.
+- get_option_chain: Options data with Greeks.
+- get_option_expiration_dates: Available option expirations.
+- get_recommendations: Analyst recommendations.
+- get_financial_statement: Income, balance sheet, cash flow.
+- get_holder_info: Institutional holders, insider activity.
+- get_stock_actions: Dividends and splits.
+- get_yahoo_finance_news: News for a ticker.
+
+## Cache Management
+
+- refresh_cache(type): Force refresh prices, fx rates, holdings, or all.
+- get_cache_status: Check cache health and refresh times.
 """,
 )
 
