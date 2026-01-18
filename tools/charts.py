@@ -595,8 +595,8 @@ def register_chart_tools(server):
                                             cash_val = cash_val * fx
 
                                     holdings_data.append({
-                                        "symbol": f"Cash ({curr_code})",
-                                        "ticker_label": f"Cash ({curr_code})",
+                                        "symbol": "Cash",
+                                        "ticker_label": "Cash",
                                         "name": "Cash",
                                         "category": "Cash",
                                         "brokerage": brokerage_name,

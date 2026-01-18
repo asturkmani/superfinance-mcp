@@ -534,13 +534,25 @@ def generate_portfolio_page_html(
     active_text = "#ffffff"
     button_hover = "#30363d" if theme == "dark" else "#e5e7eb"
 
+    # Currency symbol mapping
+    currency_symbols = {
+        "USD": "$",
+        "GBP": "£",
+        "EUR": "€",
+        "CAD": "C$",
+        "AUD": "A$",
+        "JPY": "¥",
+        "CHF": "CHF ",
+    }
+    currency_symbol = currency_symbols.get(currency, currency + " ")
+
     # JSON encode the data
     grouped_json = json_module.dumps(grouped_data)
     colors_json = json_module.dumps(default_colors)
     holdings_json = json_module.dumps(holdings)
 
-    # Format total value for display
-    formatted_total = f"{total_value:,.2f}"
+    # Format total value for display with correct currency symbol
+    formatted_total = f"{currency_symbol}{total_value:,.2f}"
 
     html = f'''<!DOCTYPE html>
 <html>
@@ -672,7 +684,7 @@ def generate_portfolio_page_html(
     <div class="container">
         <div class="header">
             <div class="title">Portfolio Dashboard</div>
-            <div class="total">Total: <span class="total-value">${formatted_total} {currency}</span></div>
+            <div class="total">Total: <span class="total-value">{formatted_total}</span></div>
         </div>
 
         <div class="controls">
@@ -704,6 +716,7 @@ def generate_portfolio_page_html(
         const colors = {colors_json};
         const holdings = {holdings_json};
         const total = {total_value};
+        const currencySymbol = '{currency_symbol}';
 
         // State
         let currentChartType = 'pie';
@@ -755,7 +768,7 @@ def generate_portfolio_page_html(
                 formatter: function(params) {{
                     const pct = params.data.pct;
                     let html = '<div style="font-weight: 600; margin-bottom: 4px;">' + params.name + '</div>' +
-                           '<div style="color: {"#94a3b8" if theme == "dark" else "#64748b"}; font-size: 12px;">Value: <span style="color: {text_color}; font-weight: 500;">$' + formatNumber(params.value) + '</span></div>' +
+                           '<div style="color: {"#94a3b8" if theme == "dark" else "#64748b"}; font-size: 12px;">Value: <span style="color: {text_color}; font-weight: 500;">' + currencySymbol + formatNumber(params.value) + '</span></div>' +
                            '<div style="color: {"#94a3b8" if theme == "dark" else "#64748b"}; font-size: 12px;">Share: <span style="color: {text_color}; font-weight: 500;">' + pct + '%</span></div>';
 
                     // Add ticker breakdown for grouped views
