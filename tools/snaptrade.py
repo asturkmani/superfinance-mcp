@@ -395,13 +395,16 @@ def register_snaptrade_tools(server):
         end_date: str,
         user_id: Optional[str] = None,
         user_secret: Optional[str] = None,
-        transaction_type: Optional[str] = None
+        transaction_type: Optional[str] = None,
+        limit: int = 25,
+        offset: int = 0,
+        summary_only: bool = False
     ) -> str:
         """
         Get transaction history for a brokerage account.
 
         Returns historical transactions including buys, sells, dividends, deposits, and withdrawals.
-        Data is refreshed once daily. Results are paginated with max 1000 per request.
+        By default returns only 25 most recent transactions to avoid context overflow.
 
         Args:
             account_id: The SnapTrade account ID (UUID from snaptrade_list_accounts)
@@ -410,18 +413,12 @@ def register_snaptrade_tools(server):
             user_id: SnapTrade user ID. If not provided, uses SNAPTRADE_USER_ID env var.
             user_secret: SnapTrade user secret. If not provided, uses SNAPTRADE_USER_SECRET env var.
             transaction_type: Optional filter by type (e.g., "BUY", "SELL", "DIVIDEND")
+            limit: Max transactions to return (default 25, max 100). Use pagination for more.
+            offset: Number of transactions to skip for pagination (default 0)
+            summary_only: If True, returns only counts and totals without transaction details
 
         Returns:
-            JSON string containing transaction history with fields:
-            - id: Transaction ID
-            - account_id, account_name: Account info
-            - type: BUY, SELL, DIVIDEND, INTEREST, etc.
-            - symbol, symbol_description: Stock/asset info
-            - option_symbol, option_type: Options info if applicable
-            - trade_date, settlement_date: Transaction dates
-            - units, price, amount: Transaction values
-            - currency, fee, fx_rate: Currency and fees
-            - institution: Brokerage name
+            JSON with transaction history. Use summary_only=True for large date ranges.
         """
         snaptrade_client = get_snaptrade_client()
         if not snaptrade_client:
@@ -437,6 +434,9 @@ def register_snaptrade_tools(server):
                 return json.dumps({
                     "error": "Credentials required"
                 })
+
+            # Cap limit at 100 to prevent context overflow
+            limit = min(limit, 100)
 
             params = {
                 "account_id": account_id,
@@ -452,19 +452,53 @@ def register_snaptrade_tools(server):
             response = snaptrade_client.account_information.get_account_activities(**params)
             activities = response.body if hasattr(response, 'body') else response
 
-            # Extract the actual list from the response dict
-            # Response has keys: ['data', 'pagination']
+            # Extract the actual list and pagination from the response dict
+            pagination_info = None
             if isinstance(activities, dict):
+                pagination_info = activities.get("pagination", {})
                 activities = activities.get("data", [])
 
-            formatted_activities = [_extract_transaction(a) for a in activities]
+            total_count = pagination_info.get("total", len(activities)) if pagination_info else len(activities)
+
+            # If summary_only, return just counts without full transaction data
+            if summary_only:
+                # Group by type for summary
+                by_type = {}
+                total_amount = 0
+                for a in activities:
+                    t = _extract_transaction(a)
+                    tx_type = t.get("type") or "UNKNOWN"
+                    if tx_type not in by_type:
+                        by_type[tx_type] = {"count": 0, "total_amount": 0}
+                    by_type[tx_type]["count"] += 1
+                    by_type[tx_type]["total_amount"] += t.get("amount") or 0
+                    total_amount += t.get("amount") or 0
+
+                return json.dumps({
+                    "success": True,
+                    "account_id": account_id,
+                    "total_transactions": total_count,
+                    "summary_by_type": by_type,
+                    "net_amount": round(total_amount, 2),
+                    "note": "Set summary_only=False and use limit/offset to view individual transactions"
+                }, indent=2)
+
+            # Apply pagination
+            paginated = activities[offset:offset + limit]
+            formatted_activities = [_extract_transaction(a) for a in paginated]
 
             return json.dumps({
                 "success": True,
                 "account_id": account_id,
-                "count": len(formatted_activities),
+                "showing": len(formatted_activities),
+                "total_available": total_count,
+                "pagination": {
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": (offset + limit) < total_count
+                },
                 "transactions": formatted_activities,
-                "note": "Data refreshed once daily. Max 1000 transactions per request."
+                "tip": f"Use offset={offset + limit} to get next page" if (offset + limit) < total_count else None
             }, indent=2)
 
         except Exception as e:
@@ -478,13 +512,16 @@ def register_snaptrade_tools(server):
         end_date: str,
         user_id: Optional[str] = None,
         user_secret: Optional[str] = None,
-        transaction_type: Optional[str] = None
+        transaction_type: Optional[str] = None,
+        limit: int = 25,
+        offset: int = 0,
+        summary_only: bool = False
     ) -> str:
         """
         Get transactions across ALL connected brokerage accounts.
 
-        Returns historical transactions from all accounts in a single call.
-        Useful for getting a complete view of all activity.
+        By default returns only 25 most recent transactions to avoid context overflow.
+        Use summary_only=True for large date ranges to get counts without details.
 
         Args:
             start_date: Start date in YYYY-MM-DD format (e.g., "2024-01-01")
@@ -492,9 +529,12 @@ def register_snaptrade_tools(server):
             user_id: SnapTrade user ID. If not provided, uses SNAPTRADE_USER_ID env var.
             user_secret: SnapTrade user secret. If not provided, uses SNAPTRADE_USER_SECRET env var.
             transaction_type: Optional filter by type (e.g., "BUY", "SELL", "DIVIDEND")
+            limit: Max transactions to return (default 25, max 100). Use pagination for more.
+            offset: Number of transactions to skip for pagination (default 0)
+            summary_only: If True, returns only counts and totals without transaction details
 
         Returns:
-            JSON string containing transactions from all accounts with summary by account
+            JSON with transactions and account summary. Use summary_only=True for overviews.
         """
         snaptrade_client = get_snaptrade_client()
         if not snaptrade_client:
@@ -511,6 +551,9 @@ def register_snaptrade_tools(server):
                     "error": "Credentials required"
                 })
 
+            # Cap limit at 100 to prevent context overflow
+            limit = min(limit, 100)
+
             params = {
                 "user_id": user_id,
                 "user_secret": user_secret,
@@ -525,28 +568,71 @@ def register_snaptrade_tools(server):
             activities = response.body if hasattr(response, 'body') else response
 
             # Extract the actual list from the response dict
-            # Response has keys: ['data', 'pagination'] or similar
             if isinstance(activities, dict):
                 activities = activities.get("data", activities.get("activities", []))
 
-            formatted = [_extract_transaction(a) for a in activities]
+            total_count = len(activities)
 
-            # Group by account for summary
+            # Build account and type summaries (always computed for context)
             by_account = {}
-            for t in formatted:
+            by_type = {}
+            total_amount = 0
+
+            for a in activities:
+                t = _extract_transaction(a)
+                # Account summary
                 acc_id = t.get("account_id") or "unknown"
                 if acc_id not in by_account:
                     by_account[acc_id] = {
                         "account_name": t.get("account_name"),
-                        "count": 0
+                        "count": 0,
+                        "total_amount": 0
                     }
                 by_account[acc_id]["count"] += 1
+                by_account[acc_id]["total_amount"] += t.get("amount") or 0
+
+                # Type summary
+                tx_type = t.get("type") or "UNKNOWN"
+                if tx_type not in by_type:
+                    by_type[tx_type] = {"count": 0, "total_amount": 0}
+                by_type[tx_type]["count"] += 1
+                by_type[tx_type]["total_amount"] += t.get("amount") or 0
+
+                total_amount += t.get("amount") or 0
+
+            # Round amounts in summaries
+            for acc in by_account.values():
+                acc["total_amount"] = round(acc["total_amount"], 2)
+            for typ in by_type.values():
+                typ["total_amount"] = round(typ["total_amount"], 2)
+
+            # If summary_only, return just summaries without transaction details
+            if summary_only:
+                return json.dumps({
+                    "success": True,
+                    "total_transactions": total_count,
+                    "net_amount": round(total_amount, 2),
+                    "by_account": by_account,
+                    "by_type": by_type,
+                    "note": "Set summary_only=False and use limit/offset to view individual transactions"
+                }, indent=2)
+
+            # Apply pagination for full results
+            paginated = activities[offset:offset + limit]
+            formatted = [_extract_transaction(a) for a in paginated]
 
             return json.dumps({
                 "success": True,
-                "total_count": len(formatted),
+                "showing": len(formatted),
+                "total_available": total_count,
+                "pagination": {
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": (offset + limit) < total_count
+                },
                 "accounts_summary": by_account,
-                "transactions": formatted
+                "transactions": formatted,
+                "tip": f"Use offset={offset + limit} to get next page, or summary_only=True for overview" if (offset + limit) < total_count else None
             }, indent=2)
 
         except Exception as e:
