@@ -751,7 +751,7 @@ def generate_portfolio_page_html(
             function getTickersForGroup(groupBy, groupName) {{
                 if (groupBy === 'ticker') return [];
                 const fieldMap = {{
-                    'name': 'consolidated_name',
+                    'name': 'name',
                     'category': 'category',
                     'brokerage': 'brokerage'
                 }};
