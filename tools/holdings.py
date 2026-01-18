@@ -6,6 +6,7 @@ from typing import Optional
 
 from helpers.pricing import get_live_price, get_fx_rate_cached
 from helpers.portfolio import load_portfolios
+from helpers.classification import get_classification, get_option_display_label
 from tools.snaptrade import get_snaptrade_client
 
 
@@ -138,9 +139,14 @@ def register_holdings_tools(server):
                             pnl = market_value - cost_basis
                             pnl_pct = round((pnl / cost_basis) * 100, 2)
 
+                        # Get classification (name + category)
+                        classification = get_classification(ticker, desc)
+
                         pos_data = {
                             "symbol": ticker,
                             "description": desc,
+                            "consolidated_name": classification.get("name", ticker or desc),
+                            "category": classification.get("category", "Other"),
                             "units": round(units, 6) if units else 0,
                             "currency": curr,
                             "price": round(price, 4) if price else None,
@@ -208,10 +214,17 @@ def register_holdings_tools(server):
                             pnl = market_value - cost_basis
                             pnl_pct = round((pnl / abs(cost_basis)) * 100, 2)
 
+                        # Get classification based on underlying symbol
+                        underlying_sym = underlying.get("symbol")
+                        underlying_desc = underlying.get("description")
+                        classification = get_classification(underlying_sym, underlying_desc)
+
                         opt_data = {
                             "type": "option",
                             "ticker": opt_sym.get("ticker"),
-                            "underlying": underlying.get("symbol"),
+                            "underlying": underlying_sym,
+                            "consolidated_name": classification.get("name", underlying_sym),
+                            "category": classification.get("category", "Other"),
                             "option_type": opt_sym.get("option_type"),
                             "strike_price": opt_sym.get("strike_price"),
                             "expiration_date": opt_sym.get("expiration_date"),
@@ -410,10 +423,16 @@ def register_holdings_tools(server):
                             pnl = market_value - cost_basis
                             pnl_pct = round((pnl / cost_basis) * 100, 2)
 
+                        # Get classification (name + category)
+                        pos_name = pos.get("name")
+                        classification = get_classification(symbol, pos_name)
+
                         pos_data = {
                             "id": pos.get("id"),
-                            "name": pos.get("name"),
+                            "name": pos_name,
                             "symbol": symbol,
+                            "consolidated_name": classification.get("name", pos_name or symbol),
+                            "category": classification.get("category", "Other"),
                             "units": units,
                             "currency": curr,
                             "price": round(live_price, 2) if live_price else None,

@@ -40,18 +40,27 @@ This server provides financial data from Yahoo Finance, brokerage integration vi
 Generate interactive charts with live data:
 - stock_chart: Generate TradingView chart for stocks (supports multiple tickers for comparison)
 - portfolio_composition_chart: Generate pie/donut chart of portfolio holdings breakdown
+- portfolio_page: Generate an interactive portfolio dashboard with:
+  - Toggle between pie chart and treemap views
+  - Group by ticker, consolidated name, category, or brokerage
+  - AI-powered category classification (Technology, Memory, Commodities, Energy, Crypto, etc.)
+  - Consolidated names for related assets (e.g., GOOG + GOOGL = "Google", PSLV + PHYS = "Silver")
 
 Charts return URLs that expire after 24 hours. TradingView charts fetch live market data automatically.
 
 ## Unified Holdings
-- list_all_holdings: Get all holdings from both SnapTrade brokerage accounts AND manual portfolios with live Yahoo Finance prices
+- list_all_holdings: Get all holdings from both SnapTrade brokerage accounts AND manual portfolios with:
+  - Live Yahoo Finance prices
+  - AI-classified categories (Technology, Memory, Commodities, etc.)
+  - Consolidated names for grouping related assets
 
 ## SnapTrade Tools (Brokerage Integration)
 - snaptrade_register_user: Register a new user for brokerage connections
 - snaptrade_get_connection_url: Get URL for user to connect brokerage accounts
 - snaptrade_list_accounts: List all connected brokerage accounts
 - snaptrade_get_holdings: Get holdings for a specific account
-- snaptrade_get_transactions: Get transaction history
+- snaptrade_get_transactions: Get transaction history for a specific account (buys, sells, dividends, etc.)
+- snaptrade_get_all_transactions: Get transactions across ALL accounts in one call
 - snaptrade_disconnect_account: Remove a brokerage connection
 - snaptrade_refresh_account: Trigger manual refresh of holdings data
 

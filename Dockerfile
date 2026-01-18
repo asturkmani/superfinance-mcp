@@ -25,6 +25,7 @@ COPY helpers/ ./helpers/
 COPY tools/ ./tools/
 COPY services/ ./services/
 COPY api/ ./api/
+COPY data/ ./data/
 COPY README.md ./
 COPY pyproject.toml ./
 

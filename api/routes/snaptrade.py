@@ -73,18 +73,52 @@ async def get_transactions(
     end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
     user_id: Optional[str] = Query(None, description="SnapTrade user ID"),
     user_secret: Optional[str] = Query(None, description="SnapTrade user secret"),
-    transaction_type: Optional[str] = Query(None, description="Filter by type (e.g., BUY,SELL,DIVIDEND)")
+    transaction_type: Optional[str] = Query(None, description="Filter by type (e.g., BUY, SELL, DIVIDEND)"),
+    offset: Optional[int] = Query(None, description="Number of records to skip (pagination)"),
+    limit: Optional[int] = Query(None, description="Max records to return (default 100, max 1000)")
 ):
     """
     Get transaction history for an account.
 
+    Returns transactions including buys, sells, dividends, deposits, and withdrawals.
+
     - **account_id**: The account UUID
     - **start_date**: Start date (YYYY-MM-DD)
     - **end_date**: End date (YYYY-MM-DD)
-    - **transaction_type**: Optional filter
+    - **transaction_type**: Optional filter (BUY, SELL, DIVIDEND, INTEREST, etc.)
+    - **offset**: Skip N records for pagination
+    - **limit**: Max records to return
+
+    Response includes: id, account info, type, symbol, dates, units, price, amount, currency, fees
     """
     return await SnapTradeService.get_transactions(
-        account_id, start_date, end_date, user_id, user_secret, transaction_type
+        account_id, start_date, end_date, user_id, user_secret, transaction_type, offset, limit
+    )
+
+
+@router.get("/transactions")
+async def get_all_transactions(
+    start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+    user_id: Optional[str] = Query(None, description="SnapTrade user ID"),
+    user_secret: Optional[str] = Query(None, description="SnapTrade user secret"),
+    accounts: Optional[str] = Query(None, description="Comma-separated account IDs to filter"),
+    brokerage_authorizations: Optional[str] = Query(None, description="Comma-separated auth IDs to filter"),
+    transaction_type: Optional[str] = Query(None, description="Filter by type (e.g., BUY, SELL, DIVIDEND)")
+):
+    """
+    Get transactions across ALL connected brokerage accounts.
+
+    Returns transactions from all accounts in a single call with summary by account.
+
+    - **start_date**: Start date (YYYY-MM-DD)
+    - **end_date**: End date (YYYY-MM-DD)
+    - **accounts**: Optional comma-separated account IDs to filter
+    - **brokerage_authorizations**: Optional comma-separated authorization IDs to filter
+    - **transaction_type**: Optional filter (BUY, SELL, DIVIDEND, etc.)
+    """
+    return await SnapTradeService.get_all_transactions(
+        start_date, end_date, user_id, user_secret, accounts, brokerage_authorizations, transaction_type
     )
 
 

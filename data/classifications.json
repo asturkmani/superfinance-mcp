@@ -1,0 +1,290 @@
+{
+  "version": 1,
+  "description": "Self-growing lookup table for ticker classifications. New entries added automatically via Perplexity API.",
+  "categories": [
+    "Technology",
+    "Memory",
+    "Commodities",
+    "Energy",
+    "Crypto/Blockchain",
+    "Healthcare",
+    "Finance",
+    "Private Equity",
+    "Real Estate",
+    "Consumer",
+    "Industrial",
+    "Utilities",
+    "Telecom",
+    "Other"
+  ],
+  "tickers": {
+    "PSLV": {
+      "name": "Silver",
+      "category": "Commodities"
+    },
+    "PHYS": {
+      "name": "Gold",
+      "category": "Commodities"
+    },
+    "SLV": {
+      "name": "Silver",
+      "category": "Commodities"
+    },
+    "GLD": {
+      "name": "Gold",
+      "category": "Commodities"
+    },
+    "IAU": {
+      "name": "Gold",
+      "category": "Commodities"
+    },
+    "SGOL": {
+      "name": "Gold",
+      "category": "Commodities"
+    },
+    "SIVR": {
+      "name": "Silver",
+      "category": "Commodities"
+    },
+    "GLDM": {
+      "name": "Gold",
+      "category": "Commodities"
+    },
+    "USO": {
+      "name": "Oil",
+      "category": "Commodities"
+    },
+    "UNG": {
+      "name": "Natural Gas",
+      "category": "Commodities"
+    },
+    "MU": {
+      "name": "Micron",
+      "category": "Memory"
+    },
+    "WDC": {
+      "name": "Western Digital",
+      "category": "Memory"
+    },
+    "STX": {
+      "name": "Seagate",
+      "category": "Memory"
+    },
+    "GOOG": {
+      "name": "Google",
+      "category": "Technology"
+    },
+    "GOOGL": {
+      "name": "Google",
+      "category": "Technology"
+    },
+    "AAPL": {
+      "name": "Apple",
+      "category": "Technology"
+    },
+    "MSFT": {
+      "name": "Microsoft",
+      "category": "Technology"
+    },
+    "META": {
+      "name": "Meta",
+      "category": "Technology"
+    },
+    "AMZN": {
+      "name": "Amazon",
+      "category": "Technology"
+    },
+    "NVDA": {
+      "name": "NVIDIA",
+      "category": "Technology"
+    },
+    "TSM": {
+      "name": "TSMC",
+      "category": "Technology"
+    },
+    "AVGO": {
+      "name": "Broadcom",
+      "category": "Technology"
+    },
+    "CIFR": {
+      "name": "Cipher Mining",
+      "category": "Crypto/Blockchain"
+    },
+    "IREN": {
+      "name": "Iris Energy",
+      "category": "Crypto/Blockchain"
+    },
+    "CLSK": {
+      "name": "CleanSpark",
+      "category": "Crypto/Blockchain"
+    },
+    "RIOT": {
+      "name": "Riot Platforms",
+      "category": "Crypto/Blockchain"
+    },
+    "MARA": {
+      "name": "Marathon Digital",
+      "category": "Crypto/Blockchain"
+    },
+    "COIN": {
+      "name": "Coinbase",
+      "category": "Crypto/Blockchain"
+    },
+    "MSTR": {
+      "name": "MicroStrategy",
+      "category": "Crypto/Blockchain"
+    },
+    "IBIT": {
+      "name": "Bitcoin ETF",
+      "category": "Crypto/Blockchain"
+    },
+    "EOSE": {
+      "name": "Eos Energy",
+      "category": "Energy"
+    },
+    "XOM": {
+      "name": "ExxonMobil",
+      "category": "Energy"
+    },
+    "CVX": {
+      "name": "Chevron",
+      "category": "Energy"
+    },
+    "ENPH": {
+      "name": "Enphase",
+      "category": "Energy"
+    },
+    "FSLR": {
+      "name": "First Solar",
+      "category": "Energy"
+    },
+    "BRK.B": {
+      "name": "Berkshire Hathaway",
+      "category": "Finance"
+    },
+    "JPM": {
+      "name": "JPMorgan",
+      "category": "Finance"
+    },
+    "V": {
+      "name": "Visa",
+      "category": "Finance"
+    },
+    "MA": {
+      "name": "Mastercard",
+      "category": "Finance"
+    },
+    "JNJ": {
+      "name": "Johnson & Johnson",
+      "category": "Healthcare"
+    },
+    "UNH": {
+      "name": "UnitedHealth",
+      "category": "Healthcare"
+    },
+    "LLY": {
+      "name": "Eli Lilly",
+      "category": "Healthcare"
+    },
+    "PFE": {
+      "name": "Pfizer",
+      "category": "Healthcare"
+    },
+    "TSLA": {
+      "name": "Tesla",
+      "category": "Consumer"
+    },
+    "HD": {
+      "name": "Home Depot",
+      "category": "Consumer"
+    },
+    "NKE": {
+      "name": "Nike",
+      "category": "Consumer"
+    },
+    "WMT": {
+      "name": "Walmart",
+      "category": "Consumer"
+    },
+    "COST": {
+      "name": "Costco",
+      "category": "Consumer"
+    },
+    "AMT": {
+      "name": "American Tower",
+      "category": "Real Estate"
+    },
+    "PLD": {
+      "name": "Prologis",
+      "category": "Real Estate"
+    },
+    "EQIX": {
+      "name": "Equinix",
+      "category": "Real Estate"
+    },
+    "CAT": {
+      "name": "Caterpillar",
+      "category": "Industrial"
+    },
+    "BA": {
+      "name": "Boeing",
+      "category": "Industrial"
+    },
+    "LMT": {
+      "name": "Lockheed Martin",
+      "category": "Industrial"
+    },
+    "UPS": {
+      "name": "UPS",
+      "category": "Industrial"
+    },
+    "NEE": {
+      "name": "NextEra",
+      "category": "Utilities"
+    },
+    "DUK": {
+      "name": "Duke Energy",
+      "category": "Utilities"
+    },
+    "T": {
+      "name": "AT&T",
+      "category": "Telecom"
+    },
+    "VZ": {
+      "name": "Verizon",
+      "category": "Telecom"
+    },
+    "TMUS": {
+      "name": "T-Mobile",
+      "category": "Telecom"
+    },
+    "STRB": {
+      "name": "SpaceX",
+      "category": "Private Equity"
+    },
+    "KRKNF": {
+      "name": "Kraken Robotics",
+      "category": "Technology"
+    },
+    "FLNC": {
+      "name": "Fluence Energy",
+      "category": "Energy"
+    },
+    "SNDK": {
+      "name": "SanDisk",
+      "category": "Memory"
+    },
+    "CPER": {
+      "name": "Copper",
+      "category": "Commodities"
+    },
+    "NBIS": {
+      "name": "Nebius Group",
+      "category": "Technology"
+    },
+    "TE": {
+      "name": "T1 Energy",
+      "category": "Energy"
+    }
+  }
+}

@@ -308,6 +308,86 @@ def register_snaptrade_tools(server):
                 "error": str(e)
             }, indent=2)
 
+    def _safe_get(obj, key, default=None):
+        """Safely get a value from dict-like objects or SnapTrade schema objects."""
+        if obj is None:
+            return default
+        # SnapTrade SDK objects support .get() directly
+        if hasattr(obj, 'get'):
+            try:
+                val = obj.get(key)
+                return val if val is not None else default
+            except Exception:
+                pass
+        # Fallback to dict access
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        # Fallback to attribute access
+        return getattr(obj, key, default)
+
+    def _extract_transaction(activity) -> dict:
+        """Extract and format a transaction from SnapTrade activity."""
+        safe_get = _safe_get
+
+        # Extract nested symbol object
+        symbol_obj = safe_get(activity, "symbol")
+        symbol = None
+        symbol_description = None
+        if symbol_obj:
+            symbol = safe_get(symbol_obj, "symbol")
+            symbol_description = safe_get(symbol_obj, "description")
+
+        # Extract nested option_symbol object
+        option_symbol_obj = safe_get(activity, "option_symbol")
+        option_symbol = None
+        if option_symbol_obj:
+            option_symbol = safe_get(option_symbol_obj, "description") or safe_get(option_symbol_obj, "id")
+
+        # Extract nested currency object
+        currency_obj = safe_get(activity, "currency")
+        currency = None
+        if currency_obj:
+            currency = safe_get(currency_obj, "code")
+
+        # Extract nested account object
+        account_obj = safe_get(activity, "account")
+        account_id = None
+        account_name = None
+        if account_obj:
+            account_id = safe_get(account_obj, "id")
+            account_name = safe_get(account_obj, "name")
+
+        # Convert Decimal types to float for JSON serialization
+        def to_float(val):
+            if val is None:
+                return None
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return val
+
+        return {
+            "id": safe_get(activity, "id"),
+            "account_id": account_id,
+            "account_name": account_name,
+            "type": safe_get(activity, "type"),
+            "symbol": symbol,
+            "symbol_description": symbol_description,
+            "option_symbol": option_symbol,
+            "option_type": safe_get(activity, "option_type"),
+            "description": safe_get(activity, "description"),
+            "trade_date": str(safe_get(activity, "trade_date")) if safe_get(activity, "trade_date") else None,
+            "settlement_date": str(safe_get(activity, "settlement_date")) if safe_get(activity, "settlement_date") else None,
+            "units": to_float(safe_get(activity, "units")),
+            "price": to_float(safe_get(activity, "price")),
+            "amount": to_float(safe_get(activity, "amount")),
+            "currency": currency,
+            "fee": to_float(safe_get(activity, "fee")),
+            "fx_rate": to_float(safe_get(activity, "fx_rate")),
+            "institution": safe_get(activity, "institution"),
+            "external_reference_id": safe_get(activity, "external_reference_id")
+        }
+
     @server.tool()
     def snaptrade_get_transactions(
         account_id: str,
@@ -329,10 +409,19 @@ def register_snaptrade_tools(server):
             end_date: End date in YYYY-MM-DD format (e.g., "2024-12-31")
             user_id: SnapTrade user ID. If not provided, uses SNAPTRADE_USER_ID env var.
             user_secret: SnapTrade user secret. If not provided, uses SNAPTRADE_USER_SECRET env var.
-            transaction_type: Optional filter by type (e.g., "BUY,SELL,DIVIDEND")
+            transaction_type: Optional filter by type (e.g., "BUY", "SELL", "DIVIDEND")
 
         Returns:
-            JSON string containing transaction history
+            JSON string containing transaction history with fields:
+            - id: Transaction ID
+            - account_id, account_name: Account info
+            - type: BUY, SELL, DIVIDEND, INTEREST, etc.
+            - symbol, symbol_description: Stock/asset info
+            - option_symbol, option_type: Options info if applicable
+            - trade_date, settlement_date: Transaction dates
+            - units, price, amount: Transaction values
+            - currency, fee, fx_rate: Currency and fees
+            - institution: Brokerage name
         """
         snaptrade_client = get_snaptrade_client()
         if not snaptrade_client:
@@ -361,39 +450,93 @@ def register_snaptrade_tools(server):
                 params["type"] = transaction_type
 
             response = snaptrade_client.account_information.get_account_activities(**params)
-
             activities = response.body if hasattr(response, 'body') else response
 
-            def safe_get(obj, key, default=None):
-                if isinstance(obj, dict):
-                    return obj.get(key, default)
-                return getattr(obj, key, default)
-
-            formatted_activities = []
-            for activity in activities:
-                if hasattr(activity, 'to_dict'):
-                    activity = activity.to_dict()
-
-                formatted_activities.append({
-                    "id": safe_get(activity, "id"),
-                    "type": safe_get(activity, "type"),
-                    "symbol": safe_get(activity, "symbol"),
-                    "description": safe_get(activity, "description"),
-                    "trade_date": safe_get(activity, "trade_date"),
-                    "settlement_date": safe_get(activity, "settlement_date"),
-                    "units": safe_get(activity, "units"),
-                    "price": safe_get(activity, "price"),
-                    "amount": safe_get(activity, "amount"),
-                    "currency": safe_get(activity, "currency"),
-                    "fee": safe_get(activity, "fee"),
-                    "institution": safe_get(activity, "institution")
-                })
+            formatted_activities = [_extract_transaction(a) for a in activities]
 
             return json.dumps({
                 "success": True,
+                "account_id": account_id,
                 "count": len(formatted_activities),
                 "transactions": formatted_activities,
                 "note": "Data refreshed once daily. Max 1000 transactions per request."
+            }, indent=2)
+
+        except Exception as e:
+            return json.dumps({
+                "error": str(e)
+            }, indent=2)
+
+    @server.tool()
+    def snaptrade_get_all_transactions(
+        start_date: str,
+        end_date: str,
+        user_id: Optional[str] = None,
+        user_secret: Optional[str] = None,
+        transaction_type: Optional[str] = None
+    ) -> str:
+        """
+        Get transactions across ALL connected brokerage accounts.
+
+        Returns historical transactions from all accounts in a single call.
+        Useful for getting a complete view of all activity.
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format (e.g., "2024-01-01")
+            end_date: End date in YYYY-MM-DD format (e.g., "2024-12-31")
+            user_id: SnapTrade user ID. If not provided, uses SNAPTRADE_USER_ID env var.
+            user_secret: SnapTrade user secret. If not provided, uses SNAPTRADE_USER_SECRET env var.
+            transaction_type: Optional filter by type (e.g., "BUY", "SELL", "DIVIDEND")
+
+        Returns:
+            JSON string containing transactions from all accounts with summary by account
+        """
+        snaptrade_client = get_snaptrade_client()
+        if not snaptrade_client:
+            return json.dumps({
+                "error": "SnapTrade not configured"
+            })
+
+        try:
+            user_id = user_id or os.getenv("SNAPTRADE_USER_ID")
+            user_secret = user_secret or os.getenv("SNAPTRADE_USER_SECRET")
+
+            if not user_id or not user_secret:
+                return json.dumps({
+                    "error": "Credentials required"
+                })
+
+            params = {
+                "user_id": user_id,
+                "user_secret": user_secret,
+                "start_date": start_date,
+                "end_date": end_date
+            }
+
+            if transaction_type:
+                params["type"] = transaction_type
+
+            response = snaptrade_client.transactions_and_reporting.get_activities(**params)
+            activities = response.body if hasattr(response, 'body') else response
+
+            formatted = [_extract_transaction(a) for a in activities]
+
+            # Group by account for summary
+            by_account = {}
+            for t in formatted:
+                acc_id = t.get("account_id") or "unknown"
+                if acc_id not in by_account:
+                    by_account[acc_id] = {
+                        "account_name": t.get("account_name"),
+                        "count": 0
+                    }
+                by_account[acc_id]["count"] += 1
+
+            return json.dumps({
+                "success": True,
+                "total_count": len(formatted),
+                "accounts_summary": by_account,
+                "transactions": formatted
             }, indent=2)
 
         except Exception as e:

@@ -10,6 +10,7 @@ Cache key structure:
 - superfinance:portfolio:{portfolio_id}              - Manual portfolio
 - superfinance:meta:last_refresh:{type}              - Refresh timestamps
 - superfinance:meta:symbols                          - Set of all tracked symbols
+- superfinance:classification:{symbol}               - AI classification (name + category)
 """
 
 import json
@@ -32,6 +33,7 @@ CACHE_PRICES_TTL = int(os.getenv("CACHE_PRICES_TTL", 600))  # 10 minutes
 CACHE_FX_TTL = int(os.getenv("CACHE_FX_TTL", 600))  # 10 minutes
 CACHE_ACCOUNTS_TTL = int(os.getenv("CACHE_ACCOUNTS_TTL", 90000))  # 25 hours
 CACHE_CHART_TTL = int(os.getenv("CACHE_CHART_TTL", 86400))  # 24 hours
+CACHE_CLASSIFICATION_TTL = int(os.getenv("CACHE_CLASSIFICATION_TTL", 604800))  # 7 days
 
 # Cache key prefix
 KEY_PREFIX = "superfinance"
