@@ -452,6 +452,11 @@ def register_snaptrade_tools(server):
             response = snaptrade_client.account_information.get_account_activities(**params)
             activities = response.body if hasattr(response, 'body') else response
 
+            # Extract the actual list from the response dict
+            # Response has keys: ['data', 'pagination']
+            if isinstance(activities, dict):
+                activities = activities.get("data", [])
+
             formatted_activities = [_extract_transaction(a) for a in activities]
 
             return json.dumps({
@@ -518,6 +523,11 @@ def register_snaptrade_tools(server):
 
             response = snaptrade_client.transactions_and_reporting.get_activities(**params)
             activities = response.body if hasattr(response, 'body') else response
+
+            # Extract the actual list from the response dict
+            # Response has keys: ['data', 'pagination'] or similar
+            if isinstance(activities, dict):
+                activities = activities.get("data", activities.get("activities", []))
 
             formatted = [_extract_transaction(a) for a in activities]
 

@@ -398,21 +398,12 @@ class SnapTradeService:
             response = client.account_information.get_account_activities(**params)
             activities = response.body if hasattr(response, 'body') else response
 
-            # Debug: understand the response structure
-            print(f"DEBUG get_transactions:")
-            print(f"  Type: {type(activities)}")
+            # Extract the actual list from the response dict
+            pagination_info = None
             if isinstance(activities, dict):
-                print(f"  Keys: {list(activities.keys())}")
-                for k, v in activities.items():
-                    print(f"  [{k}]: type={type(v)}, len={len(v) if hasattr(v, '__len__') else 'N/A'}")
-                # If it's a dict, the activities list is likely under a key
-                if "activities" in activities:
-                    activities = activities["activities"]
-                elif hasattr(activities, 'get') and activities.get("activities"):
-                    activities = activities.get("activities")
-                else:
-                    # Try to get values if it's a dict of activities
-                    activities = list(activities.values())
+                # Response has keys: ['data', 'pagination']
+                pagination_info = activities.get("pagination")
+                activities = activities.get("data", [])
 
             formatted = [SnapTradeService._extract_transaction(a) for a in activities]
 
@@ -421,7 +412,7 @@ class SnapTradeService:
                 "account_id": account_id,
                 "count": len(formatted),
                 "transactions": formatted,
-                "pagination": {
+                "pagination": pagination_info or {
                     "offset": offset or 0,
                     "limit": limit,
                     "has_more": len(formatted) == (limit or 1000)
@@ -481,21 +472,10 @@ class SnapTradeService:
             response = client.transactions_and_reporting.get_activities(**params)
             activities = response.body if hasattr(response, 'body') else response
 
-            # Debug: understand the response structure
-            print(f"DEBUG get_all_transactions:")
-            print(f"  Type: {type(activities)}")
+            # Extract the actual list from the response dict
             if isinstance(activities, dict):
-                print(f"  Keys: {list(activities.keys())}")
-                for k, v in activities.items():
-                    print(f"  [{k}]: type={type(v)}, len={len(v) if hasattr(v, '__len__') else 'N/A'}")
-                # If it's a dict, the activities list is likely under a key
-                if "activities" in activities:
-                    activities = activities["activities"]
-                elif hasattr(activities, 'get') and activities.get("activities"):
-                    activities = activities.get("activities")
-                else:
-                    # Try to get values if it's a dict of activities
-                    activities = list(activities.values())
+                # Response has keys: ['data', 'pagination'] or similar
+                activities = activities.get("data", activities.get("activities", []))
 
             formatted = [SnapTradeService._extract_transaction(a) for a in activities]
 
