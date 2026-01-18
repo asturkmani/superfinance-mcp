@@ -71,24 +71,58 @@ Args:
 
     @server.tool(
         name="get_stock_info",
-        description="""Get stock information for a given ticker symbol from yahoo finance. Include the following information:
+        description="""Get stock information for one or more ticker symbols from yahoo finance. Include the following information:
 Stock Price & Trading Info, Company Information, Financial Metrics, Earnings & Revenue, Margins & Returns, Dividends, Balance Sheet, Ownership, Analyst Coverage, Risk Metrics, Other.
 
 Args:
-    ticker: str
-        The ticker symbol of the stock to get information for, e.g. "AAPL"
+    tickers: str
+        Single ticker or comma-separated tickers (e.g., "AAPL" or "AAPL,MSFT,GOOG")
 """,
     )
-    async def get_stock_info(ticker: str) -> str:
-        """Get stock information for a given ticker symbol"""
-        company = yf.Ticker(ticker)
+    async def get_stock_info(tickers: str) -> str:
+        """Get stock information for one or more ticker symbols"""
+        # Parse comma-separated tickers
+        ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+
+        if not ticker_list:
+            return json.dumps({"error": "No valid tickers provided"})
+
+        # Single ticker - return flat response for backwards compatibility
+        if len(ticker_list) == 1:
+            ticker = ticker_list[0]
+            company = yf.Ticker(ticker)
+            try:
+                if company.isin is None:
+                    return f"Company ticker {ticker} not found."
+            except Exception as e:
+                return f"Error: getting stock information for {ticker}: {e}"
+            info = company.info
+            return json.dumps(info)
+
+        # Multiple tickers - use batch fetch
+        result = {}
+        ticker_str = " ".join(ticker_list)
+
         try:
-            if company.isin is None:
-                return f"Company ticker {ticker} not found."
+            batch = yf.Tickers(ticker_str)
+
+            for ticker in ticker_list:
+                try:
+                    company = batch.tickers.get(ticker)
+                    if company:
+                        info = company.info
+                        if info and info.get("regularMarketPrice") is not None:
+                            result[ticker] = info
+                        else:
+                            result[ticker] = {"error": f"No data available for {ticker}"}
+                    else:
+                        result[ticker] = {"error": f"Ticker {ticker} not found"}
+                except Exception as e:
+                    result[ticker] = {"error": str(e)}
         except Exception as e:
-            return f"Error: getting stock information for {ticker}: {e}"
-        info = company.info
-        return json.dumps(info)
+            return json.dumps({"error": f"Batch fetch failed: {str(e)}"})
+
+        return json.dumps(result)
 
     @server.tool(
         name="get_yahoo_finance_news",

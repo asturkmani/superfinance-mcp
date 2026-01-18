@@ -23,6 +23,8 @@ COPY cache.py ./
 COPY refresh.py ./
 COPY helpers/ ./helpers/
 COPY tools/ ./tools/
+COPY services/ ./services/
+COPY api/ ./api/
 COPY README.md ./
 COPY pyproject.toml ./
 

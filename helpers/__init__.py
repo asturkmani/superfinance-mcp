@@ -7,6 +7,10 @@ from helpers.portfolio import (
     save_portfolios,
     generate_position_id,
 )
+from helpers.chart_templates import (
+    generate_tradingview_chart_html,
+    generate_chartjs_pie_html,
+)
 
 __all__ = [
     "get_live_price",
@@ -15,4 +19,6 @@ __all__ = [
     "load_portfolios",
     "save_portfolios",
     "generate_position_id",
+    "generate_tradingview_chart_html",
+    "generate_chartjs_pie_html",
 ]

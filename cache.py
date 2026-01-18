@@ -31,6 +31,7 @@ CACHE_HOLDINGS_TTL = int(os.getenv("CACHE_HOLDINGS_TTL", 90000))  # 25 hours
 CACHE_PRICES_TTL = int(os.getenv("CACHE_PRICES_TTL", 600))  # 10 minutes
 CACHE_FX_TTL = int(os.getenv("CACHE_FX_TTL", 600))  # 10 minutes
 CACHE_ACCOUNTS_TTL = int(os.getenv("CACHE_ACCOUNTS_TTL", 90000))  # 25 hours
+CACHE_CHART_TTL = int(os.getenv("CACHE_CHART_TTL", 86400))  # 24 hours
 
 # Cache key prefix
 KEY_PREFIX = "superfinance"
@@ -367,3 +368,39 @@ def get_cache_status() -> dict:
         status["tracked_symbols_truncated"] = True
 
     return status
+
+
+# ============================================================================
+# Chart caching
+# ============================================================================
+
+def cache_chart(chart_id: str, html_content: str) -> bool:
+    """
+    Store chart HTML with 24hr TTL.
+
+    Args:
+        chart_id: Unique identifier for the chart
+        html_content: The HTML content to cache
+
+    Returns:
+        True if successful, False otherwise
+    """
+    key = f"chart:{chart_id}"
+    return set_cached(key, {"html": html_content}, CACHE_CHART_TTL)
+
+
+def get_cached_chart(chart_id: str) -> Optional[str]:
+    """
+    Retrieve chart HTML by ID.
+
+    Args:
+        chart_id: The chart ID to retrieve
+
+    Returns:
+        The HTML content, or None if not found/expired
+    """
+    key = f"chart:{chart_id}"
+    data = get_cached(key)
+    if data and data.get("html"):
+        return data["html"]
+    return None

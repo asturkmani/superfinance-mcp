@@ -22,11 +22,11 @@ yfinance_server = FastMCP(
     instructions="""
 # SuperFinance MCP Server
 
-This server provides financial data from Yahoo Finance, brokerage integration via SnapTrade, and manual portfolio management for private investments.
+This server provides financial data from Yahoo Finance, brokerage integration via SnapTrade, manual portfolio management for private investments, and interactive chart generation.
 
 ## Yahoo Finance Tools
 - get_historical_stock_prices: Get historical OHLCV data for a ticker symbol
-- get_stock_info: Get comprehensive stock information (price, metrics, company info)
+- get_stock_info: Get comprehensive stock information for one or more tickers (supports comma-separated, e.g., "AAPL,MSFT,GOOG")
 - get_yahoo_finance_news: Get news for a given ticker symbol
 - get_stock_actions: Get stock dividends and stock splits
 - get_financial_statement: Get income statement, balance sheet, or cash flow
@@ -35,6 +35,13 @@ This server provides financial data from Yahoo Finance, brokerage integration vi
 - get_option_chain: Get options chain for a ticker, expiration date, and type
 - get_recommendations: Get analyst recommendations or upgrades/downgrades
 - get_fx_rate: Get current foreign exchange rate between two currencies
+
+## Chart Tools
+Generate interactive charts with live data:
+- stock_chart: Generate TradingView chart for stocks (supports multiple tickers for comparison)
+- portfolio_composition_chart: Generate pie/donut chart of portfolio holdings breakdown
+
+Charts return URLs that expire after 24 hours. TradingView charts fetch live market data automatically.
 
 ## Unified Holdings
 - list_all_holdings: Get all holdings from both SnapTrade brokerage accounts AND manual portfolios with live Yahoo Finance prices
@@ -69,6 +76,7 @@ Cache refresh schedules:
 - Stock prices: Every 5 minutes
 - FX rates: Every 5 minutes
 - Holdings: Every 12 hours
+- Charts: Expire after 24 hours
 """,
 )
 
@@ -84,7 +92,7 @@ if __name__ == "__main__":
     if os.getenv("FLY_APP_NAME") or os.getenv("PORT"):
         # Remote deployment - use HTTP
         port = int(os.getenv("PORT", "8080"))
-        print(f"Starting SuperFinance MCP server on HTTP at 0.0.0.0:{port}")
+        print(f"Starting SuperFinance server on HTTP at 0.0.0.0:{port}")
 
         # Start background scheduler for cache refresh if cache is available
         if cache.is_cache_available():
@@ -93,26 +101,49 @@ if __name__ == "__main__":
         else:
             print("Redis cache not available, background refresh disabled")
 
-        # Create the MCP app
+        # Create the MCP app (Starlette-based)
         app = yfinance_server.http_app()
 
         # Add a simple health check endpoint for Fly.io
-        from starlette.responses import JSONResponse
-        from starlette.routing import Route
+        from starlette.responses import JSONResponse, HTMLResponse
+        from starlette.routing import Route, Mount
 
         async def health_check(request):
             cache_status = "ok" if cache.is_cache_available() else "unavailable"
             scheduler_status = refresh.get_scheduler_status()
             return JSONResponse({
                 "status": "ok",
-                "service": "superfinance-mcp",
+                "service": "superfinance",
+                "mcp": "/mcp (POST)",
+                "api": "/api/docs",
                 "cache": cache_status,
                 "scheduler": scheduler_status
             })
 
+        async def serve_chart(request):
+            """Serve cached chart HTML."""
+            chart_id = request.path_params["chart_id"]
+            html = cache.get_cached_chart(chart_id)
+            if html:
+                return HTMLResponse(html)
+            return JSONResponse(
+                {"error": "Chart expired or not found"},
+                status_code=404
+            )
+
         # Add health check route
         app.routes.insert(0, Route("/", health_check))
         app.routes.insert(1, Route("/health", health_check))
+        # Add chart serving route
+        app.routes.insert(2, Route("/charts/{chart_id}", serve_chart))
+
+        # Mount the FastAPI REST API
+        from api import create_api_app
+        api_app = create_api_app()
+        app.mount("/", api_app)  # Mount at root, FastAPI routes are prefixed with /api
+
+        print("REST API available at /api/docs")
+        print("MCP protocol available at /mcp")
 
         # Run with uvicorn
         import uvicorn
@@ -120,4 +151,5 @@ if __name__ == "__main__":
     else:
         # Local development - use stdio
         print("Starting SuperFinance MCP server with stdio transport")
+        print("Note: REST API is only available in HTTP mode (set PORT env var)")
         yfinance_server.run()
