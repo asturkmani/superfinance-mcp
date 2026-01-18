@@ -125,6 +125,48 @@ def extract_underlying_symbol(symbol: str) -> str:
     return symbol.upper()
 
 
+def clean_description_for_name(description: str) -> str:
+    """
+    Clean up a description to use as a fallback name.
+
+    Strips dates, tranches, series letters, and other noise.
+
+    Examples:
+        "Anthropic (Dec 2024)" -> "Anthropic"
+        "SpaceX Series J" -> "SpaceX"
+        "xAI Tranche 2" -> "xAI"
+    """
+    import re
+
+    if not description:
+        return description
+
+    name = description.strip()
+
+    # Remove parenthetical content (dates, tranches)
+    # e.g., "Anthropic (Dec 2024)" -> "Anthropic"
+    name = re.sub(r'\s*\([^)]*\)\s*', ' ', name)
+
+    # Remove "Series X" patterns
+    # e.g., "SpaceX Series J" -> "SpaceX"
+    name = re.sub(r'\s+Series\s+[A-Z0-9]+\s*$', '', name, flags=re.IGNORECASE)
+
+    # Remove "Tranche X" patterns
+    # e.g., "xAI Tranche 2" -> "xAI"
+    name = re.sub(r'\s+Tranche\s+\d+\s*$', '', name, flags=re.IGNORECASE)
+
+    # Remove trailing date patterns like "Dec 2024", "January 2025"
+    name = re.sub(r'\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\s*$', '', name, flags=re.IGNORECASE)
+
+    # Remove trailing year patterns like "2024", "2025"
+    name = re.sub(r'\s+\d{4}\s*$', '', name)
+
+    # Clean up extra whitespace
+    name = ' '.join(name.split())
+
+    return name.strip() or description
+
+
 def classify_with_perplexity(symbol: str) -> Optional[dict]:
     """
     Use Perplexity API to classify an unknown ticker.
@@ -303,10 +345,14 @@ def get_classification(symbol: str, description: str = None) -> dict:
         print(f"New classification added: {underlying} -> {result['name']} ({result['category']})")
         return result
 
-    # 5. Fallback
+    # 5. Fallback - clean up description to strip dates/tranches
+    fallback_name = underlying
+    if description:
+        fallback_name = clean_description_for_name(description)
+
     fallback = {
-        "name": description or underlying,
-        "category": "Other",
+        "name": fallback_name,
+        "category": "Private Equity" if underlying.endswith(".PVT") else "Other",
         "source": "fallback"
     }
     cache_classification(underlying, fallback)
