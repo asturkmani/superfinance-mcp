@@ -1081,91 +1081,122 @@ def register_portfolio_tools(server):
         }, indent=2)
 
     @server.tool()
-    def update_classification(
-        symbol: str,
-        name: Optional[str] = None,
-        category: Optional[str] = None
+    def update_classifications(
+        updates: list[dict]
     ) -> str:
         """
-        Update the classification (name and/or category) for a symbol.
+        Update classifications (name and/or category) for one or more symbols.
 
-        This overrides the AI-generated classification. Use this to:
+        This overrides AI-generated classifications. Use this to:
         - Group related tickers under a common name (e.g., GOOG + GOOGL -> "Google")
         - Change a holding's category (e.g., IREN from "Crypto" to "AI Infrastructure")
-        - Create new categories for custom groupings
+        - Batch update multiple symbols at once
 
         Args:
-            symbol: The ticker symbol to update
-            name: New consolidated name (optional, keeps existing if not provided)
-            category: New category (optional, keeps existing if not provided)
+            updates: List of updates, each with: symbol (required), name (optional), category (optional)
 
         Returns:
-            JSON confirming the update
+            JSON with results for each update
 
         Examples:
-            update_classification(symbol="IREN", category="AI Infrastructure")
-            update_classification(symbol="GOOGL", name="Google", category="Technology")
+            update_classifications(updates=[{"symbol": "IREN", "category": "AI Infrastructure"}])
+            update_classifications(updates=[
+                {"symbol": "GOOG", "name": "Google", "category": "Technology"},
+                {"symbol": "GOOGL", "name": "Google", "category": "Technology"}
+            ])
         """
-        if not name and not category:
-            return json.dumps({
-                "error": "Must provide at least one of: name, category",
-                "hint": "Use list_classifications() to see current values"
-            }, indent=2)
+        if not updates:
+            return json.dumps({"error": "No updates provided"}, indent=2)
 
-        # Get available categories for validation/suggestion
         available_categories = get_known_categories()
+        results = []
+        new_categories = set()
 
-        result = _update_classification(symbol, name, category)
+        for update in updates:
+            symbol = update.get("symbol")
+            name = update.get("name")
+            category = update.get("category")
 
-        if result.get("success"):
-            response = {
-                "success": True,
-                "symbol": result["symbol"],
-                "name": result["name"],
-                "category": result["category"],
-                "message": f"Classification updated for {result['symbol']}"
-            }
+            if not symbol:
+                results.append({"error": "Missing symbol", "update": update})
+                continue
 
-            # Note if a new category was created
-            if category and category not in available_categories:
-                response["note"] = f"New category '{category}' was added to the category list"
+            if not name and not category:
+                results.append({
+                    "error": "Must provide at least one of: name, category",
+                    "symbol": symbol
+                })
+                continue
 
-            return json.dumps(response, indent=2)
-        else:
-            return json.dumps(result, indent=2)
+            result = _update_classification(symbol, name, category)
+
+            if result.get("success"):
+                entry = {
+                    "success": True,
+                    "symbol": result["symbol"],
+                    "name": result["name"],
+                    "category": result["category"]
+                }
+                if category and category not in available_categories:
+                    new_categories.add(category)
+                results.append(entry)
+            else:
+                results.append({"success": False, "symbol": symbol, "error": result.get("error")})
+
+        response = {
+            "updated": len([r for r in results if r.get("success")]),
+            "failed": len([r for r in results if not r.get("success")]),
+            "results": results
+        }
+
+        if new_categories:
+            response["new_categories"] = list(new_categories)
+
+        return json.dumps(response, indent=2)
 
     @server.tool()
-    def add_category(category: str) -> str:
+    def add_categories(categories: list[str]) -> str:
         """
-        Add a new category to the available categories list.
+        Add one or more new categories to the available categories list.
 
         Categories are used to group holdings by investment theme/sector.
-        New categories are also automatically created when using update_classification().
+        New categories are also automatically created when using update_classifications().
 
         Args:
-            category: The new category name (e.g., "AI Infrastructure", "Defense")
+            categories: List of category names (e.g., ["AI Infrastructure", "Defense"])
 
         Returns:
-            JSON confirming the category was added
+            JSON confirming which categories were added
+
+        Examples:
+            add_categories(categories=["AI Infrastructure"])
+            add_categories(categories=["Defense", "Space", "Biotech"])
         """
+        if not categories:
+            return json.dumps({"error": "No categories provided"}, indent=2)
+
         existing = get_known_categories()
+        added = []
+        already_existed = []
+        failed = []
 
-        if category in existing:
-            return json.dumps({
-                "success": True,
-                "category": category,
-                "message": f"Category '{category}' already exists",
-                "all_categories": existing
-            }, indent=2)
+        for category in categories:
+            if not category or not isinstance(category, str):
+                failed.append({"category": category, "error": "Invalid category"})
+                continue
 
-        if _add_category(category):
-            return json.dumps({
-                "success": True,
-                "category": category,
-                "message": f"Category '{category}' added",
-                "all_categories": get_known_categories()
-            }, indent=2)
-        else:
-            return json.dumps({
-                "error": f"Failed to add category '{category}'"
-            }, indent=2)
+            category = category.strip()
+            if category in existing:
+                already_existed.append(category)
+            elif _add_category(category):
+                added.append(category)
+                existing.append(category)  # Update local list
+            else:
+                failed.append({"category": category, "error": "Failed to add"})
+
+        return json.dumps({
+            "added": added,
+            "already_existed": already_existed,
+            "failed": failed,
+            "all_categories": get_known_categories()
+        }, indent=2)

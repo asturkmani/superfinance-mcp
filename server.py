@@ -47,13 +47,13 @@ Override AI-generated classifications for custom groupings:
 
 - list_categories(): List available categories (Technology, Memory, Commodities, etc.)
 - list_classifications(category?): List all symbol→name/category mappings.
-- update_classification(symbol, name?, category?): Override a symbol's name or category.
-- add_category(category): Add a new category.
+- update_classifications(updates): Batch update symbols. Each update has: symbol, name?, category?
+- add_categories(categories): Add multiple new categories.
 
-Use update_classification() to:
-- Group related tickers (GOOG + GOOGL → "Google")
-- Change categories (IREN from "Crypto" to "AI Infrastructure")
-- Create custom groupings for your portfolio
+Use update_classifications() to:
+- Group related tickers: [{"symbol": "GOOG", "name": "Google"}, {"symbol": "GOOGL", "name": "Google"}]
+- Change categories: [{"symbol": "IREN", "category": "AI Infrastructure"}]
+- Batch updates for efficiency
 
 ## Visualization
 
