@@ -311,15 +311,17 @@ def get_option_display_label(option_data: dict) -> str:
     Generate a display label for an option position.
 
     Args:
-        option_data: Option data dict with underlying, strike_price, option_type, etc.
+        option_data: Option data dict with underlying, strike_price, option_type, expiration_date, etc.
 
     Returns:
-        Label like "AAPL 150C" or "MU 85P"
+        Label like "AAPL Jan17 150C" or "MU 85P"
     """
     underlying = option_data.get("underlying", "???")
     strike = option_data.get("strike_price", "")
     opt_type = option_data.get("option_type", "").upper()
+    expiration = option_data.get("expiration_date", "")
 
+    # Format strike price
     if strike:
         strike_str = str(int(strike)) if float(strike) == int(strike) else str(strike)
     else:
@@ -327,12 +329,32 @@ def get_option_display_label(option_data: dict) -> str:
 
     type_char = opt_type[0] if opt_type else ""
 
+    # Format expiration date (e.g., "2025-01-17" -> "Jan17")
+    exp_str = ""
+    if expiration:
+        try:
+            from datetime import datetime
+            if isinstance(expiration, str):
+                # Try parsing ISO format
+                exp_date = datetime.fromisoformat(expiration.replace("Z", "+00:00"))
+            else:
+                exp_date = expiration
+            exp_str = exp_date.strftime("%b%d").replace(" 0", " ").replace("0", "", 1) if exp_date.day < 10 else exp_date.strftime("%b%d")
+            # Clean up: "Jan17" not "Jan 17"
+            exp_str = exp_date.strftime("%b") + str(exp_date.day)
+        except Exception:
+            pass
+
+    # Build label: "AAPL Jan17 150C" or "AAPL 150C" (if no date)
+    parts = [underlying]
+    if exp_str:
+        parts.append(exp_str)
     if strike_str and type_char:
-        return f"{underlying} {strike_str}{type_char}"
+        parts.append(f"{strike_str}{type_char}")
     elif strike_str:
-        return f"{underlying} {strike_str}"
-    else:
-        return underlying
+        parts.append(strike_str)
+
+    return " ".join(parts)
 
 
 # Expose categories for external use

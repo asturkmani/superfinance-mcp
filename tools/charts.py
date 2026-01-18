@@ -564,6 +564,7 @@ def register_chart_tools(server):
                                         "underlying": underlying_sym,
                                         "strike_price": opt_sym.get("strike_price"),
                                         "option_type": opt_sym.get("option_type"),
+                                        "expiration_date": opt_sym.get("expiration_date"),
                                     })
 
                                     holdings_data.append({
@@ -573,6 +574,33 @@ def register_chart_tools(server):
                                         "category": classification.get("category", "Other"),
                                         "brokerage": brokerage_name,
                                         "value": market_value,
+                                    })
+
+                            # Process cash balances
+                            for bal in holdings.get("balances", []):
+                                if hasattr(bal, 'to_dict'):
+                                    bal = bal.to_dict()
+
+                                curr = bal.get("currency", {})
+                                if hasattr(curr, 'to_dict'):
+                                    curr = curr.to_dict()
+                                curr_code = curr.get("code") if isinstance(curr, dict) else None
+
+                                cash_val = bal.get("cash") or 0
+                                if curr_code and cash_val > 0:
+                                    # Convert to reporting currency if specified
+                                    if reporting_currency and curr_code != reporting_currency:
+                                        fx = get_fx_rate_cached(curr_code, reporting_currency, fx_cache)
+                                        if fx:
+                                            cash_val = cash_val * fx
+
+                                    holdings_data.append({
+                                        "symbol": f"Cash ({curr_code})",
+                                        "ticker_label": f"Cash ({curr_code})",
+                                        "name": "Cash",
+                                        "category": "Cash",
+                                        "brokerage": brokerage_name,
+                                        "value": cash_val,
                                     })
 
                         except Exception:
