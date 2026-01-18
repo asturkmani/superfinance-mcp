@@ -156,14 +156,21 @@ Examples:
 - GLD, PHYS, IAU all → "Gold" (different gold ETFs)
 - GOOG, GOOGL → "Google" (different share classes)
 - BRK.A, BRK.B → "Berkshire Hathaway"
+- ANTH.PVT (any Anthropic tranche) → "Anthropic"
+- SPAX.PVT (any SpaceX series) → "SpaceX"
 
-Use a simple, recognizable name (e.g., "Google" not "Alphabet Inc Class A").
+IMPORTANT for NAME:
+- Use a simple, recognizable name (e.g., "Google" not "Alphabet Inc Class A")
+- Strip dates, tranche info, series letters (e.g., "Anthropic (Dec 2024)" → "Anthropic", "SpaceX Series J" → "SpaceX")
+- .PVT suffix indicates private equity - use the company name only
+- Multiple investment rounds in same company should consolidate to ONE name
 
 **CATEGORY**: The investment theme/sector exposure based on the company's CURRENT business model. The goal is to help categorise the company into a theme that is easy to understand and use for portfolio management.
 Important: Companies pivot! Use current market data:
 - IREN, CIFR, CLSK were pure Bitcoin miners but many now do HPC/AI infrastructure
 - MSTR is a Bitcoin treasury company, not enterprise software
 - Tesla is primarily automotive/energy, not tech
+- Anthropic, xAI, OpenAI → "AI/ML" or "Technology"
 
 EXISTING CATEGORIES (use one if it fits, or suggest a new one):
 {categories_list}

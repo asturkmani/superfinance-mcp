@@ -730,6 +730,15 @@ def generate_portfolio_page_html(
             return num.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
         }}
 
+        function formatCompact(num) {{
+            if (num >= 1000000) {{
+                return (num / 1000000).toFixed(1) + 'M';
+            }} else if (num >= 1000) {{
+                return (num / 1000).toFixed(1) + 'k';
+            }}
+            return num.toFixed(0);
+        }}
+
         function getChartOption(chartType, data) {{
             const chartData = data.map((item, i) => ({{
                 name: item.label,
@@ -802,7 +811,7 @@ def generate_portfolio_page_html(
                         formatter: function(name) {{
                             const item = chartData.find(d => d.name === name);
                             if (item) {{
-                                return isMobile ? name : name + '  ' + item.pct + '%';
+                                return isMobile ? name : name + '  ' + item.pct + '%  ' + currencySymbol + formatCompact(item.value);
                             }}
                             return name;
                         }},
