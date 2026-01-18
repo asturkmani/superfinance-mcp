@@ -41,6 +41,20 @@ Single interface for both manual portfolios and synced brokerage accounts:
 Manual portfolios: User-managed, supports private equity (.PVT suffix), manual pricing.
 Synced portfolios: Read-only positions from connected brokerages via SnapTrade.
 
+## Classification Management
+
+Override AI-generated classifications for custom groupings:
+
+- list_categories(): List available categories (Technology, Memory, Commodities, etc.)
+- list_classifications(category?): List all symbol→name/category mappings.
+- update_classification(symbol, name?, category?): Override a symbol's name or category.
+- add_category(category): Add a new category.
+
+Use update_classification() to:
+- Group related tickers (GOOG + GOOGL → "Google")
+- Change categories (IREN from "Crypto" to "AI Infrastructure")
+- Create custom groupings for your portfolio
+
 ## Visualization
 
 Single chart() tool for all visualizations:

@@ -12,7 +12,13 @@ from typing import Optional, Literal
 
 from helpers.portfolio import load_portfolios, save_portfolios, generate_position_id
 from helpers.pricing import get_live_price, get_fx_rate_cached
-from helpers.classification import get_classification
+from helpers.classification import (
+    get_classification,
+    get_known_categories,
+    get_all_classifications,
+    update_classification as _update_classification,
+    add_category as _add_category,
+)
 from tools.snaptrade import get_snaptrade_client
 
 
@@ -1010,3 +1016,156 @@ def register_portfolio_tools(server):
 
         except Exception as e:
             return json.dumps({"error": str(e)}, indent=2)
+
+    # =========================================================================
+    # Classification Tools
+    # =========================================================================
+
+    @server.tool()
+    def list_categories() -> str:
+        """
+        List all available categories for classifying holdings.
+
+        Categories are used to group holdings by investment theme/sector.
+        Use update_classification() to change a holding's category.
+
+        Returns:
+            JSON with list of categories
+        """
+        categories = get_known_categories()
+        return json.dumps({
+            "success": True,
+            "count": len(categories),
+            "categories": categories
+        }, indent=2)
+
+    @server.tool()
+    def list_classifications(
+        category: Optional[str] = None
+    ) -> str:
+        """
+        List all symbol classifications (name and category mappings).
+
+        Shows how symbols are grouped and categorized. Use update_classification()
+        to change any mapping.
+
+        Args:
+            category: Optional filter by category (e.g., "Technology", "Commodities")
+
+        Returns:
+            JSON with all classifications
+        """
+        data = get_all_classifications()
+        tickers = data.get("tickers", {})
+
+        # Filter by category if specified
+        if category:
+            tickers = {
+                symbol: info
+                for symbol, info in tickers.items()
+                if info.get("category", "").lower() == category.lower()
+            }
+
+        # Sort by category then name
+        sorted_tickers = dict(sorted(
+            tickers.items(),
+            key=lambda x: (x[1].get("category", ""), x[1].get("name", ""))
+        ))
+
+        return json.dumps({
+            "success": True,
+            "categories": data.get("categories", []),
+            "count": len(sorted_tickers),
+            "filter": category,
+            "classifications": sorted_tickers
+        }, indent=2)
+
+    @server.tool()
+    def update_classification(
+        symbol: str,
+        name: Optional[str] = None,
+        category: Optional[str] = None
+    ) -> str:
+        """
+        Update the classification (name and/or category) for a symbol.
+
+        This overrides the AI-generated classification. Use this to:
+        - Group related tickers under a common name (e.g., GOOG + GOOGL -> "Google")
+        - Change a holding's category (e.g., IREN from "Crypto" to "AI Infrastructure")
+        - Create new categories for custom groupings
+
+        Args:
+            symbol: The ticker symbol to update
+            name: New consolidated name (optional, keeps existing if not provided)
+            category: New category (optional, keeps existing if not provided)
+
+        Returns:
+            JSON confirming the update
+
+        Examples:
+            update_classification(symbol="IREN", category="AI Infrastructure")
+            update_classification(symbol="GOOGL", name="Google", category="Technology")
+        """
+        if not name and not category:
+            return json.dumps({
+                "error": "Must provide at least one of: name, category",
+                "hint": "Use list_classifications() to see current values"
+            }, indent=2)
+
+        # Get available categories for validation/suggestion
+        available_categories = get_known_categories()
+
+        result = _update_classification(symbol, name, category)
+
+        if result.get("success"):
+            response = {
+                "success": True,
+                "symbol": result["symbol"],
+                "name": result["name"],
+                "category": result["category"],
+                "message": f"Classification updated for {result['symbol']}"
+            }
+
+            # Note if a new category was created
+            if category and category not in available_categories:
+                response["note"] = f"New category '{category}' was added to the category list"
+
+            return json.dumps(response, indent=2)
+        else:
+            return json.dumps(result, indent=2)
+
+    @server.tool()
+    def add_category(category: str) -> str:
+        """
+        Add a new category to the available categories list.
+
+        Categories are used to group holdings by investment theme/sector.
+        New categories are also automatically created when using update_classification().
+
+        Args:
+            category: The new category name (e.g., "AI Infrastructure", "Defense")
+
+        Returns:
+            JSON confirming the category was added
+        """
+        existing = get_known_categories()
+
+        if category in existing:
+            return json.dumps({
+                "success": True,
+                "category": category,
+                "message": f"Category '{category}' already exists",
+                "all_categories": existing
+            }, indent=2)
+
+        if _add_category(category):
+            return json.dumps({
+                "success": True,
+                "category": category,
+                "message": f"Category '{category}' added",
+                "all_categories": get_known_categories()
+            }, indent=2)
+        else:
+            return json.dumps({
+                "error": f"Failed to add category '{category}'"
+            }, indent=2)

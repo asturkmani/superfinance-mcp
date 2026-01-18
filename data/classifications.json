@@ -15,7 +15,9 @@
     "Industrial",
     "Utilities",
     "Telecom",
-    "Other"
+    "Other",
+    "AI Infrastructure",
+    "Defense"
   ],
   "tickers": {
     "PSLV": {
@@ -112,7 +114,7 @@
     },
     "IREN": {
       "name": "Iris Energy",
-      "category": "Crypto/Blockchain"
+      "category": "AI Infrastructure"
     },
     "CLSK": {
       "name": "CleanSpark",

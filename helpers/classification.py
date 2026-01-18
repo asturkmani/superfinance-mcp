@@ -374,5 +374,86 @@ def get_category_options() -> list[str]:
     return get_known_categories()
 
 
+def update_classification(symbol: str, name: Optional[str] = None, category: Optional[str] = None) -> dict:
+    """
+    Update/override the classification for a symbol.
+
+    Args:
+        symbol: The ticker symbol
+        name: New consolidated name (optional)
+        category: New category (optional)
+
+    Returns:
+        {"success": True, "symbol": ..., "name": ..., "category": ...}
+    """
+    symbol = symbol.upper().strip()
+    underlying = extract_underlying_symbol(symbol)
+
+    data = _load_classifications()
+
+    # Get existing classification or create new
+    existing = data.get("tickers", {}).get(underlying, {})
+
+    new_name = name if name is not None else existing.get("name", underlying)
+    new_category = category if category is not None else existing.get("category", "Other")
+
+    # Update the classification
+    data.setdefault("tickers", {})[underlying] = {
+        "name": new_name,
+        "category": new_category
+    }
+
+    # Add category if it's new
+    if new_category not in data.get("categories", []):
+        data.setdefault("categories", []).append(new_category)
+
+    # Save to file
+    if not _save_classifications(data):
+        return {"success": False, "error": "Failed to save classification"}
+
+    # Clear Redis cache for this symbol
+    clear_classification_cache(underlying)
+
+    return {
+        "success": True,
+        "symbol": underlying,
+        "name": new_name,
+        "category": new_category
+    }
+
+
+def clear_classification_cache(symbol: str) -> bool:
+    """Clear Redis cache for a symbol's classification."""
+    symbol = symbol.upper().strip()
+    underlying = extract_underlying_symbol(symbol)
+    key = f"classification:{underlying}"
+    return cache.delete_cached(key)
+
+
+def get_all_classifications() -> dict:
+    """Get all classifications from the lookup table."""
+    data = _load_classifications()
+    return {
+        "categories": data.get("categories", ["Other"]),
+        "tickers": data.get("tickers", {})
+    }
+
+
+def reload_classifications() -> None:
+    """Reload classifications from disk (clears in-memory cache)."""
+    global _classifications_data
+    _classifications_data = None
+    _load_classifications()
+
+
+def add_category(category: str) -> bool:
+    """Add a new category to the list."""
+    data = _load_classifications()
+    if category not in data.get("categories", []):
+        data.setdefault("categories", []).append(category)
+        return _save_classifications(data)
+    return True
+
+
 # For backward compatibility
 CATEGORY_OPTIONS = get_known_categories()
