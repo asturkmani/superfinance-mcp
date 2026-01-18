@@ -6,7 +6,7 @@ import uuid
 from typing import Optional
 
 import cache
-from helpers.chart_templates import generate_tradingview_chart_html, generate_chartjs_pie_html
+from helpers.chart_templates import generate_tradingview_chart_html, generate_chartjs_pie_html, generate_treemap_html
 from helpers.pricing import get_live_price, get_fx_rate_cached
 from helpers.portfolio import load_portfolios
 from tools.snaptrade import get_snaptrade_client
@@ -118,7 +118,7 @@ def register_chart_tools(server):
         Args:
             include: What to include - "all", "stocks", "options", "private", or comma-separated combo (e.g., "stocks,options")
             group_by: How to group data - "holding" (by ticker/name), "type" (stocks/options/private), or "asset_type"
-            chart_type: "pie" or "donut"
+            chart_type: "pie", "donut", or "treemap" (heatmap-style)
             theme: "dark" or "light"
             reporting_currency: Currency for value conversion (e.g., "USD", "GBP"). Uses native currencies if not specified.
 
@@ -145,7 +145,7 @@ def register_chart_tools(server):
                 "valid_options": ["holding", "type", "asset_type"]
             })
 
-        if chart_type not in ["pie", "donut"]:
+        if chart_type not in ["pie", "donut", "treemap"]:
             chart_type = "donut"
 
         if theme not in ["dark", "light"]:
@@ -358,12 +358,19 @@ def register_chart_tools(server):
             title = f"Portfolio by Asset Type{currency_suffix}"
 
         # Generate chart HTML
-        html = generate_chartjs_pie_html(
-            data=chart_data,
-            title=title,
-            chart_type="doughnut" if chart_type == "donut" else "pie",
-            theme=theme,
-        )
+        if chart_type == "treemap":
+            html = generate_treemap_html(
+                data=chart_data,
+                title=title,
+                theme=theme,
+            )
+        else:
+            html = generate_chartjs_pie_html(
+                data=chart_data,
+                title=title,
+                chart_type="doughnut" if chart_type == "donut" else "pie",
+                theme=theme,
+            )
 
         # Generate unique chart ID and cache
         chart_id = str(uuid.uuid4())[:8]

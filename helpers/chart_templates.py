@@ -1,5 +1,6 @@
 """HTML template generators for chart tools."""
 
+import json as json_module
 from typing import Optional
 
 
@@ -312,6 +313,179 @@ def generate_chartjs_pie_html(
         chart.setOption(option);
 
         // Responsive resize
+        window.addEventListener('resize', function() {{
+            chart.resize();
+        }});
+    </script>
+</body>
+</html>'''
+
+    return html
+
+
+def generate_treemap_html(
+    data: list[dict],
+    title: str,
+    theme: str = "dark",
+) -> str:
+    """
+    Generate HTML page with Apache ECharts treemap (heatmap-style).
+
+    Args:
+        data: List of dicts with label, value keys
+        title: Chart title
+        theme: "dark" or "light"
+
+    Returns:
+        Complete HTML page string
+    """
+    # Beautiful color palette
+    default_colors = [
+        "#5470c6", "#91cc75", "#fac858", "#ee6666", "#73c0de",
+        "#3ba272", "#fc8452", "#9a60b4", "#ea7ccc", "#48b8d0",
+        "#c4b5fd", "#6ee7b7", "#fbbf24", "#f87171", "#60a5fa",
+    ]
+
+    # Prepare data for ECharts treemap
+    total = sum(item.get("value", 0) for item in data)
+    treemap_data = []
+
+    for i, item in enumerate(data):
+        value = item.get("value", 0)
+        pct = (value / total * 100) if total > 0 else 0
+        treemap_data.append({
+            "name": item.get("label", f"Item {i+1}"),
+            "value": round(value, 2),
+            "pct": round(pct, 1),
+            "itemStyle": {"color": default_colors[i % len(default_colors)]}
+        })
+
+    treemap_data_json = json_module.dumps(treemap_data)
+
+    # Theme colors
+    bg_color = "#0d1117" if theme == "dark" else "#ffffff"
+    text_color = "#e6edf3" if theme == "dark" else "#1f2937"
+    subtitle_color = "#8b949e" if theme == "dark" else "#6b7280"
+    border_color = "#1e293b" if theme == "dark" else "#e2e8f0"
+
+    html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>{title}</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        html, body {{
+            width: 100%;
+            height: 100%;
+            background: {bg_color};
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            overflow: hidden;
+        }}
+        #chart {{
+            width: 100%;
+            height: 100%;
+        }}
+    </style>
+</head>
+<body>
+    <div id="chart"></div>
+    <script>
+        const chart = echarts.init(document.getElementById('chart'), '{theme}');
+        const total = {total};
+        const isMobile = window.innerWidth < 768;
+
+        const option = {{
+            backgroundColor: '{bg_color}',
+            title: {{
+                text: '{title}',
+                subtext: 'Total: $' + total.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}}),
+                left: 'center',
+                top: 15,
+                textStyle: {{
+                    color: '{text_color}',
+                    fontSize: isMobile ? 18 : 22,
+                    fontWeight: 600
+                }},
+                subtextStyle: {{
+                    color: '{subtitle_color}',
+                    fontSize: isMobile ? 12 : 14
+                }}
+            }},
+            tooltip: {{
+                trigger: 'item',
+                backgroundColor: '{"rgba(30, 41, 59, 0.95)" if theme == "dark" else "rgba(255, 255, 255, 0.95)"}',
+                borderColor: '{"#334155" if theme == "dark" else "#e2e8f0"}',
+                borderWidth: 1,
+                borderRadius: 8,
+                padding: [12, 16],
+                textStyle: {{
+                    color: '{text_color}',
+                    fontSize: 13
+                }},
+                formatter: function(params) {{
+                    const pct = params.data.pct;
+                    return '<div style="font-weight: 600; margin-bottom: 4px;">' + params.name + '</div>' +
+                           '<div style="color: {"#94a3b8" if theme == "dark" else "#64748b"}; font-size: 12px;">Value: <span style="color: {text_color}; font-weight: 500;">$' + params.value.toLocaleString(undefined, {{minimumFractionDigits: 2}}) + '</span></div>' +
+                           '<div style="color: {"#94a3b8" if theme == "dark" else "#64748b"}; font-size: 12px;">Share: <span style="color: {text_color}; font-weight: 500;">' + pct + '%</span></div>';
+                }}
+            }},
+            series: [
+                {{
+                    type: 'treemap',
+                    top: isMobile ? 70 : 80,
+                    left: 10,
+                    right: 10,
+                    bottom: 10,
+                    roam: false,
+                    nodeClick: false,
+                    breadcrumb: {{
+                        show: false
+                    }},
+                    label: {{
+                        show: true,
+                        formatter: function(params) {{
+                            const pct = params.data.pct;
+                            if (pct < 3) return '';
+                            return params.name + '\\n' + pct + '%';
+                        }},
+                        color: '#ffffff',
+                        fontSize: isMobile ? 11 : 13,
+                        fontWeight: 600,
+                        textShadowColor: 'rgba(0, 0, 0, 0.5)',
+                        textShadowBlur: 4,
+                        lineHeight: isMobile ? 16 : 20
+                    }},
+                    itemStyle: {{
+                        borderColor: '{border_color}',
+                        borderWidth: 2,
+                        gapWidth: 2,
+                        borderRadius: 4
+                    }},
+                    emphasis: {{
+                        itemStyle: {{
+                            shadowBlur: 20,
+                            shadowColor: 'rgba(0, 0, 0, 0.3)'
+                        }},
+                        label: {{
+                            fontSize: isMobile ? 13 : 15
+                        }}
+                    }},
+                    data: {treemap_data_json},
+                    animationDuration: 1000,
+                    animationEasing: 'cubicOut'
+                }}
+            ]
+        }};
+
+        chart.setOption(option);
+
         window.addEventListener('resize', function() {{
             chart.resize();
         }});

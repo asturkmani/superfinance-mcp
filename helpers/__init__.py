@@ -10,6 +10,7 @@ from helpers.portfolio import (
 from helpers.chart_templates import (
     generate_tradingview_chart_html,
     generate_chartjs_pie_html,
+    generate_treemap_html,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "generate_position_id",
     "generate_tradingview_chart_html",
     "generate_chartjs_pie_html",
+    "generate_treemap_html",
 ]
