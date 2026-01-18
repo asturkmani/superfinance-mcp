@@ -759,7 +759,7 @@ def generate_portfolio_page_html(
                 if (!field) return [];
                 return holdings
                     .filter(h => h[field] === groupName)
-                    .map(h => h.symbol)
+                    .map(h => h.ticker_label)
                     .sort();
             }}
 
