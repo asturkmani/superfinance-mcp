@@ -1,11 +1,11 @@
 """
 Redis-based classification system for holdings.
 
-All classifications are stored in Redis:
-- Auto-generated (via Perplexity): 7-day TTL, regenerated on miss
-- User overrides: Permanent (no TTL)
+Simple model:
+1. First lookup → Perplexity classifies → stored permanently in Redis
+2. User override → updates same entry in Redis
 
-No local JSON file - everything lives in Redis.
+All classifications are permanent (no TTL).
 """
 
 import os
@@ -13,13 +13,11 @@ import json
 from typing import Optional
 
 import cache
-from cache import CACHE_CLASSIFICATION_TTL
 
 
 # Redis key patterns
 KEY_CATEGORIES = "superfinance:categories"
-KEY_CLASSIFICATION = "superfinance:classification"  # :symbol
-KEY_OVERRIDE = "superfinance:classification:override"  # :symbol
+KEY_CLASSIFICATION = "superfinance:classification"  # :{symbol}
 
 
 # Default categories (seeded on first use)
@@ -50,7 +48,6 @@ def _ensure_categories() -> list[str]:
     try:
         categories = client.smembers(KEY_CATEGORIES)
         if not categories:
-            # Seed default categories
             for cat in DEFAULT_CATEGORIES:
                 client.sadd(KEY_CATEGORIES, cat)
             return DEFAULT_CATEGORIES
@@ -87,10 +84,8 @@ def get_known_names() -> list[str]:
 
     try:
         names = set()
-
-        # Get override keys
-        override_keys = client.keys(f"{KEY_OVERRIDE}:*")
-        for key in (override_keys or []):
+        keys = client.keys(f"{KEY_CLASSIFICATION}:*")
+        for key in (keys or []):
             data = client.get(key)
             if data:
                 try:
@@ -99,20 +94,6 @@ def get_known_names() -> list[str]:
                         names.add(parsed["name"])
                 except:
                     pass
-
-        # Get auto-generated keys
-        classification_keys = client.keys(f"{KEY_CLASSIFICATION}:*")
-        for key in (classification_keys or []):
-            if ":override:" not in key:
-                data = client.get(key)
-                if data:
-                    try:
-                        parsed = json.loads(data) if isinstance(data, str) else data
-                        if parsed.get("name"):
-                            names.add(parsed["name"])
-                    except:
-                        pass
-
         return sorted(list(names))
     except Exception as e:
         print(f"Error getting names: {e}")
@@ -123,27 +104,25 @@ def extract_underlying_symbol(symbol: str) -> str:
     """Extract underlying ticker from option symbols."""
     if not symbol:
         return symbol
-
     parts = symbol.split()
     if len(parts) > 1:
         return parts[0].upper()
-
     return symbol.upper()
 
 
-def get_override(symbol: str) -> Optional[dict]:
-    """Get user override for a symbol."""
+def get_stored_classification(symbol: str) -> Optional[dict]:
+    """Get classification from Redis."""
     symbol = symbol.upper().strip()
     underlying = extract_underlying_symbol(symbol)
-    key = f"{KEY_OVERRIDE}:{underlying}"
+    key = f"{KEY_CLASSIFICATION}:{underlying}"
     return cache.get_cached(key)
 
 
-def set_override(symbol: str, name: str, category: str) -> bool:
-    """Set user override for a symbol (permanent, no TTL)."""
+def store_classification(symbol: str, name: str, category: str, source: str = "perplexity") -> bool:
+    """Store classification in Redis (permanent, no TTL)."""
     symbol = symbol.upper().strip()
     underlying = extract_underlying_symbol(symbol)
-    key = f"{KEY_OVERRIDE}:{underlying}"
+    key = f"{KEY_CLASSIFICATION}:{underlying}"
 
     client = cache._get_redis_client()
     if not client:
@@ -153,44 +132,18 @@ def set_override(symbol: str, name: str, category: str) -> bool:
         data = json.dumps({
             "name": name,
             "category": category,
-            "source": "override"
+            "source": source
         })
         client.set(key, data)  # No TTL - permanent
-
-        # Also add category if new
         add_category(category)
-
-        # Clear auto-generated cache so override takes effect
-        clear_classification_cache(underlying)
-
         return True
     except Exception as e:
-        print(f"Error setting override: {e}")
+        print(f"Error storing classification: {e}")
         return False
 
 
-def clear_override(symbol: str) -> bool:
-    """Remove user override for a symbol."""
-    symbol = symbol.upper().strip()
-    underlying = extract_underlying_symbol(symbol)
-    key = f"{KEY_OVERRIDE}:{underlying}"
-    return cache.delete_cached(key)
-
-
-def get_cached_classification(symbol: str) -> Optional[dict]:
-    """Get auto-generated classification from Redis cache."""
-    key = f"{KEY_CLASSIFICATION}:{symbol.upper()}"
-    return cache.get_cached(key)
-
-
-def cache_classification(symbol: str, data: dict) -> bool:
-    """Cache an auto-generated classification (with TTL)."""
-    key = f"{KEY_CLASSIFICATION}:{symbol.upper()}"
-    return cache.set_cached(key, data, CACHE_CLASSIFICATION_TTL)
-
-
-def clear_classification_cache(symbol: str) -> bool:
-    """Clear auto-generated cache for a symbol."""
+def delete_classification(symbol: str) -> bool:
+    """Delete classification from Redis."""
     symbol = symbol.upper().strip()
     underlying = extract_underlying_symbol(symbol)
     key = f"{KEY_CLASSIFICATION}:{underlying}"
@@ -198,9 +151,7 @@ def clear_classification_cache(symbol: str) -> bool:
 
 
 def classify_with_perplexity(symbol: str, description: str = None) -> Optional[dict]:
-    """
-    Use Perplexity API to classify an unknown ticker.
-    """
+    """Use Perplexity API to classify an unknown ticker."""
     api_key = os.getenv("PERPLEXITY_API_KEY")
     if not api_key:
         return None
@@ -229,22 +180,20 @@ Examples:
 
 IMPORTANT for NAME:
 - Use a simple, recognizable name (e.g., "Google" not "Alphabet Inc Class A")
-- Strip dates, tranche info, series letters from descriptions (e.g., "Anthropic (Dec 2024)" → "Anthropic", "SpaceX Series J" → "SpaceX")
-- .PVT suffix indicates private equity - use the company name only, extract from description if needed
-- Multiple investment rounds in same company should consolidate to ONE name
-- If you can't find info about the ticker, use the description but CLEAN IT UP (remove dates, parentheticals, tranche info)
+- Strip dates, tranche info, series letters from descriptions
+- .PVT suffix indicates private equity - use the company name only
+- If you can't find info, clean up the description (remove dates, parentheticals)
 
-**CATEGORY**: The investment theme/sector exposure based on the company's CURRENT business model.
-Important: Companies pivot! Use current market data:
-- IREN, CIFR, CLSK were pure Bitcoin miners but many now do HPC/AI infrastructure
-- MSTR is a Bitcoin treasury company, not enterprise software
-- Tesla is primarily automotive/energy, not tech
-- Anthropic, xAI, OpenAI → "AI/ML" or "Technology"
+**CATEGORY**: The investment theme/sector based on CURRENT business model.
+Important: Companies pivot!
+- IREN, CIFR, CLSK were Bitcoin miners but many now do HPC/AI
+- MSTR is a Bitcoin treasury company
+- Anthropic, xAI, OpenAI → "Technology" or "AI/ML"
 
 EXISTING CATEGORIES (use one if it fits, or suggest a new one):
 {categories_list}
 
-EXISTING NAMES (use same name if this ticker is related to one):
+EXISTING NAMES (use same name if this ticker is related):
 {names_sample}
 
 Return ONLY a JSON object:
@@ -259,14 +208,8 @@ Return ONLY a JSON object:
             json={
                 "model": "sonar",
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": "You are a financial data assistant. Return only valid JSON, no markdown or explanation."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
+                    {"role": "system", "content": "You are a financial data assistant. Return only valid JSON."},
+                    {"role": "user", "content": prompt}
                 ],
                 "max_tokens": 100,
                 "temperature": 0.1
@@ -281,19 +224,15 @@ Return ONLY a JSON object:
         result = response.json()
         content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-        # Clean up response
         content = content.strip()
         if content.startswith("```"):
             lines = content.split("\n")
             content = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
         content = content.strip()
 
-        # Parse JSON
         try:
             data = json.loads(content)
-            name = data.get("name", symbol)
-            category = data.get("category", "Other")
-            return {"name": name, "category": category}
+            return {"name": data.get("name", symbol), "category": data.get("category", "Other")}
         except json.JSONDecodeError:
             print(f"Failed to parse Perplexity response for {symbol}: {content}")
             return None
@@ -305,85 +244,54 @@ Return ONLY a JSON object:
 
 def get_classification(symbol: str, description: str = None) -> dict:
     """
-    Get classification (name and category) for a holding.
+    Get classification for a holding.
 
-    Priority:
-    1. User override (permanent in Redis)
-    2. Auto-generated cache (7-day TTL in Redis)
-    3. Perplexity API (generates and caches)
-    4. Fallback defaults
+    1. Check Redis (permanent storage)
+    2. If not found, call Perplexity and store permanently
+    3. Fallback if Perplexity fails
     """
     if not symbol:
-        return {
-            "name": description or "Unknown",
-            "category": "Other",
-            "source": "fallback"
-        }
+        return {"name": description or "Unknown", "category": "Other", "source": "fallback"}
 
     symbol = symbol.upper().strip()
     underlying = extract_underlying_symbol(symbol)
 
-    # 1. Check user override (permanent)
-    override = get_override(underlying)
-    if override:
-        return override
+    # 1. Check Redis
+    stored = get_stored_classification(underlying)
+    if stored:
+        return stored
 
-    # 2. Check auto-generated cache
-    cached = get_cached_classification(underlying)
-    if cached:
-        return cached
-
-    # 3. Try Perplexity for unknown tickers
+    # 2. Classify with Perplexity and store
     perplexity_result = classify_with_perplexity(underlying, description)
     if perplexity_result:
-        result = {
-            "name": perplexity_result["name"],
-            "category": perplexity_result["category"],
-            "source": "perplexity"
-        }
+        store_classification(underlying, perplexity_result["name"], perplexity_result["category"], "perplexity")
+        print(f"Classified: {underlying} → {perplexity_result['name']} ({perplexity_result['category']})")
+        return {"name": perplexity_result["name"], "category": perplexity_result["category"], "source": "perplexity"}
 
-        # Add category if new
-        add_category(result["category"])
-
-        # Cache in Redis (with TTL)
-        cache_classification(underlying, result)
-
-        print(f"New classification: {underlying} -> {result['name']} ({result['category']})")
-        return result
-
-    # 4. Fallback
-    fallback = {
-        "name": description or underlying,
-        "category": "Private Equity" if underlying.endswith(".PVT") else "Other",
-        "source": "fallback"
-    }
-    cache_classification(underlying, fallback)
-    return fallback
+    # 3. Fallback
+    fallback_name = description or underlying
+    fallback_category = "Private Equity" if underlying.endswith(".PVT") else "Other"
+    store_classification(underlying, fallback_name, fallback_category, "fallback")
+    return {"name": fallback_name, "category": fallback_category, "source": "fallback"}
 
 
 def update_classification(symbol: str, name: Optional[str] = None, category: Optional[str] = None) -> dict:
     """
-    Update/override the classification for a symbol.
-    Stores as permanent override in Redis.
+    Update classification for a symbol. Just overwrites the entry in Redis.
     """
     symbol = symbol.upper().strip()
     underlying = extract_underlying_symbol(symbol)
 
-    # Get existing (from override or cache)
-    existing = get_override(underlying) or get_cached_classification(underlying) or {}
+    # Get existing
+    existing = get_stored_classification(underlying) or {}
 
     new_name = name if name is not None else existing.get("name", underlying)
     new_category = category if category is not None else existing.get("category", "Other")
 
-    if set_override(underlying, new_name, new_category):
-        return {
-            "success": True,
-            "symbol": underlying,
-            "name": new_name,
-            "category": new_category
-        }
+    if store_classification(underlying, new_name, new_category, "override"):
+        return {"success": True, "symbol": underlying, "name": new_name, "category": new_category}
     else:
-        return {"success": False, "error": "Failed to save override"}
+        return {"success": False, "error": "Failed to save classification"}
 
 
 def get_all_classifications() -> dict:
@@ -393,11 +301,9 @@ def get_all_classifications() -> dict:
         return {"categories": DEFAULT_CATEGORIES, "tickers": {}}
 
     tickers = {}
-
     try:
-        # Get overrides first (they take priority)
-        override_keys = client.keys(f"{KEY_OVERRIDE}:*")
-        for key in (override_keys or []):
+        keys = client.keys(f"{KEY_CLASSIFICATION}:*")
+        for key in (keys or []):
             symbol = key.split(":")[-1]
             data = client.get(key)
             if data:
@@ -406,34 +312,14 @@ def get_all_classifications() -> dict:
                     tickers[symbol] = {
                         "name": parsed.get("name", symbol),
                         "category": parsed.get("category", "Other"),
-                        "source": "override"
+                        "source": parsed.get("source", "unknown")
                     }
                 except:
                     pass
 
-        # Get auto-generated (don't overwrite overrides)
-        classification_keys = client.keys(f"{KEY_CLASSIFICATION}:*")
-        for key in (classification_keys or []):
-            if ":override:" not in key:
-                symbol = key.split(":")[-1]
-                if symbol not in tickers:  # Don't overwrite overrides
-                    data = client.get(key)
-                    if data:
-                        try:
-                            parsed = json.loads(data) if isinstance(data, str) else data
-                            tickers[symbol] = {
-                                "name": parsed.get("name", symbol),
-                                "category": parsed.get("category", "Other"),
-                                "source": parsed.get("source", "perplexity")
-                            }
-                        except:
-                            pass
-
-        categories = get_known_categories()
-        return {"categories": categories, "tickers": tickers}
-
+        return {"categories": get_known_categories(), "tickers": tickers}
     except Exception as e:
-        print(f"Error getting all classifications: {e}")
+        print(f"Error getting classifications: {e}")
         return {"categories": DEFAULT_CATEGORIES, "tickers": {}}
 
 
@@ -444,11 +330,7 @@ def get_option_display_label(option_data: dict) -> str:
     opt_type = option_data.get("option_type", "").upper()
     expiration = option_data.get("expiration_date", "")
 
-    if strike:
-        strike_str = str(int(strike)) if float(strike) == int(strike) else str(strike)
-    else:
-        strike_str = ""
-
+    strike_str = str(int(strike)) if strike and float(strike) == int(strike) else str(strike) if strike else ""
     type_char = opt_type[0] if opt_type else ""
 
     exp_str = ""
@@ -460,7 +342,7 @@ def get_option_display_label(option_data: dict) -> str:
             else:
                 exp_date = expiration
             exp_str = exp_date.strftime("%b") + str(exp_date.day)
-        except Exception:
+        except:
             pass
 
     parts = [underlying]
@@ -474,7 +356,7 @@ def get_option_display_label(option_data: dict) -> str:
     return " ".join(parts)
 
 
-# Expose for backward compatibility
+# Backward compatibility
 def get_category_options() -> list[str]:
     return get_known_categories()
 
