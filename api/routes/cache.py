@@ -91,3 +91,27 @@ async def refresh_cache(
         "success": True,
         "refreshed": results
     }
+
+
+@router.delete("/key/{key}")
+async def delete_cache_key(key: str):
+    """
+    Delete a specific cache key.
+
+    Useful for clearing stale classifications or other cached data.
+
+    Args:
+        key: The cache key to delete (e.g., "classification:ANTH.PVT")
+    """
+    if not cache.is_cache_available():
+        return {
+            "success": False,
+            "error": "Redis cache not configured"
+        }
+
+    result = cache.delete_cached(key)
+    return {
+        "success": result,
+        "key": key,
+        "message": "Key deleted" if result else "Key not found or deletion failed"
+    }
