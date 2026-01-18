@@ -6,10 +6,13 @@ Simple model:
 2. User override → updates same entry in Redis
 
 All classifications are permanent (no TTL).
+Uses locking to prevent duplicate Perplexity calls for the same symbol.
 """
 
 import os
 import json
+import threading
+import time
 from typing import Optional
 
 import cache
@@ -18,6 +21,10 @@ import cache
 # Redis key patterns
 KEY_CATEGORIES = "superfinance:categories"
 KEY_CLASSIFICATION = "superfinance:classification"  # :{symbol}
+
+# Lock to prevent concurrent Perplexity calls for the same symbol
+_classification_lock = threading.Lock()
+_in_flight: set[str] = set()  # Symbols currently being classified
 
 
 # Default categories (seeded on first use)
@@ -247,8 +254,11 @@ def get_classification(symbol: str, description: str = None) -> dict:
     Get classification for a holding.
 
     1. Check Redis (permanent storage)
-    2. If not found, call Perplexity and store permanently
-    3. Fallback if Perplexity fails
+    2. If in-flight by another thread, wait for it
+    3. If not found, call Perplexity and store permanently
+    4. Fallback if Perplexity fails
+
+    Uses locking to prevent duplicate Perplexity calls for the same symbol.
     """
     if not symbol:
         return {"name": description or "Unknown", "category": "Other", "source": "fallback"}
@@ -256,23 +266,62 @@ def get_classification(symbol: str, description: str = None) -> dict:
     symbol = symbol.upper().strip()
     underlying = extract_underlying_symbol(symbol)
 
-    # 1. Check Redis
+    # 1. Quick check Redis (no lock needed for read)
     stored = get_stored_classification(underlying)
     if stored:
         return stored
 
-    # 2. Classify with Perplexity and store
-    perplexity_result = classify_with_perplexity(underlying, description)
-    if perplexity_result:
-        store_classification(underlying, perplexity_result["name"], perplexity_result["category"], "perplexity")
-        print(f"Classified: {underlying} → {perplexity_result['name']} ({perplexity_result['category']})")
-        return {"name": perplexity_result["name"], "category": perplexity_result["category"], "source": "perplexity"}
+    # 2. Acquire lock to check/update in-flight status
+    should_classify = False
+    with _classification_lock:
+        # Re-check cache (might have been populated while waiting for lock)
+        stored = get_stored_classification(underlying)
+        if stored:
+            return stored
 
-    # 3. Fallback
-    fallback_name = description or underlying
-    fallback_category = "Private Equity" if underlying.endswith(".PVT") else "Other"
-    store_classification(underlying, fallback_name, fallback_category, "fallback")
-    return {"name": fallback_name, "category": fallback_category, "source": "fallback"}
+        if underlying in _in_flight:
+            # Another thread is working on it
+            should_classify = False
+        else:
+            # We'll do the classification
+            _in_flight.add(underlying)
+            should_classify = True
+
+    # 3. If another thread is classifying, wait for result
+    if not should_classify:
+        for _ in range(30):  # Max 15 seconds
+            time.sleep(0.5)
+            stored = get_stored_classification(underlying)
+            if stored:
+                return stored
+            with _classification_lock:
+                if underlying not in _in_flight:
+                    # Other thread finished, check cache
+                    stored = get_stored_classification(underlying)
+                    if stored:
+                        return stored
+                    break
+        # Timeout or other thread failed - return fallback
+        fallback_name = description or underlying
+        fallback_category = "Private Equity" if underlying.endswith(".PVT") else "Other"
+        return {"name": fallback_name, "category": fallback_category, "source": "fallback"}
+
+    # 4. We own it - do the classification
+    try:
+        perplexity_result = classify_with_perplexity(underlying, description)
+        if perplexity_result:
+            store_classification(underlying, perplexity_result["name"], perplexity_result["category"], "perplexity")
+            print(f"Classified: {underlying} → {perplexity_result['name']} ({perplexity_result['category']})")
+            return {"name": perplexity_result["name"], "category": perplexity_result["category"], "source": "perplexity"}
+
+        # Fallback if Perplexity fails
+        fallback_name = description or underlying
+        fallback_category = "Private Equity" if underlying.endswith(".PVT") else "Other"
+        store_classification(underlying, fallback_name, fallback_category, "fallback")
+        return {"name": fallback_name, "category": fallback_category, "source": "fallback"}
+    finally:
+        with _classification_lock:
+            _in_flight.discard(underlying)
 
 
 def update_classification(symbol: str, name: Optional[str] = None, category: Optional[str] = None) -> dict:
