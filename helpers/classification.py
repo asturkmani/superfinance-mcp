@@ -122,7 +122,20 @@ def get_stored_classification(symbol: str) -> Optional[dict]:
     symbol = symbol.upper().strip()
     underlying = extract_underlying_symbol(symbol)
     key = f"{KEY_CLASSIFICATION}:{underlying}"
-    return cache.get_cached(key)
+
+    # Use client directly since we store with full key (not via cache helper)
+    client = cache._get_redis_client()
+    if not client:
+        return None
+
+    try:
+        data = client.get(key)
+        if data:
+            return json.loads(data) if isinstance(data, str) else data
+        return None
+    except Exception as e:
+        print(f"Error getting classification for {symbol}: {e}")
+        return None
 
 
 def store_classification(symbol: str, name: str, category: str, source: str = "perplexity") -> bool:
@@ -154,7 +167,17 @@ def delete_classification(symbol: str) -> bool:
     symbol = symbol.upper().strip()
     underlying = extract_underlying_symbol(symbol)
     key = f"{KEY_CLASSIFICATION}:{underlying}"
-    return cache.delete_cached(key)
+
+    client = cache._get_redis_client()
+    if not client:
+        return False
+
+    try:
+        client.delete(key)
+        return True
+    except Exception as e:
+        print(f"Error deleting classification for {symbol}: {e}")
+        return False
 
 
 def classify_with_perplexity(symbol: str, description: str = None) -> Optional[dict]:
