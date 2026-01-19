@@ -775,7 +775,7 @@ def generate_portfolio_page_html(
                     fontSize: 13
                 }},
                 formatter: function(params) {{
-                    const pct = params.data.pct;
+                    const pct = params.data.pct || ((params.value / total) * 100).toFixed(1);
                     let html = '<div style="font-weight: 600; margin-bottom: 4px;">' + params.name + '</div>' +
                            '<div style="color: {"#94a3b8" if theme == "dark" else "#64748b"}; font-size: 12px;">Value: <span style="color: {text_color}; font-weight: 500;">' + currencySymbol + formatNumber(params.value) + '</span></div>' +
                            '<div style="color: {"#94a3b8" if theme == "dark" else "#64748b"}; font-size: 12px;">Share: <span style="color: {text_color}; font-weight: 500;">' + pct + '%</span></div>';
@@ -883,9 +883,9 @@ def generate_portfolio_page_html(
                         label: {{
                             show: true,
                             formatter: function(params) {{
-                                const pct = parseFloat(params.data.pct);
-                                if (pct < 3) return '';
-                                return params.name + '\\n' + params.data.pct + '%';
+                                const pct = params.data.pct || ((params.value / total) * 100).toFixed(1);
+                                if (parseFloat(pct) < 3) return '';
+                                return params.name + '\\n' + pct + '%';
                             }},
                             color: '#ffffff',
                             fontSize: isMobile ? 11 : 13,
