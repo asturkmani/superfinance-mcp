@@ -502,6 +502,8 @@ def generate_portfolio_page_html(
     total_value: float,
     currency: str,
     theme: str = "light",
+    liabilities_data: list[dict] = None,
+    liabilities_total: float = 0,
 ) -> str:
     """
     Generate an interactive portfolio dashboard page with toggleable views.
@@ -512,10 +514,14 @@ def generate_portfolio_page_html(
         total_value: Total portfolio value
         currency: Currency code for display
         theme: "dark" or "light"
+        liabilities_data: Optional list of liability dicts with label, value keys
+        liabilities_total: Total liabilities value
 
     Returns:
         Complete HTML page string
     """
+    if liabilities_data is None:
+        liabilities_data = []
     # Beautiful color palette
     default_colors = [
         "#5470c6", "#91cc75", "#fac858", "#ee6666", "#73c0de",
@@ -546,13 +552,20 @@ def generate_portfolio_page_html(
     }
     currency_symbol = currency_symbols.get(currency, currency + " ")
 
+    # Calculate net worth
+    net_worth = total_value - liabilities_total
+    has_liabilities = len(liabilities_data) > 0
+
     # JSON encode the data
     grouped_json = json_module.dumps(grouped_data)
     colors_json = json_module.dumps(default_colors)
     holdings_json = json_module.dumps(holdings)
+    liabilities_json = json_module.dumps(liabilities_data)
 
-    # Format total value for display with correct currency symbol
-    formatted_total = f"{currency_symbol}{total_value:,.2f}"
+    # Format values for display with correct currency symbol
+    formatted_assets = f"{currency_symbol}{total_value:,.2f}"
+    formatted_liabilities = f"{currency_symbol}{liabilities_total:,.2f}"
+    formatted_net_worth = f"{currency_symbol}{net_worth:,.2f}"
 
     html = f'''<!DOCTYPE html>
 <html>
@@ -593,13 +606,29 @@ def generate_portfolio_page_html(
             font-size: 24px;
             font-weight: 600;
         }}
-        .total {{
-            font-size: 18px;
+        .totals {{
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
             color: {subtitle_color};
+        }}
+        .total-item {{
+            white-space: nowrap;
+        }}
+        .total-separator {{
+            color: {border_color};
         }}
         .total-value {{
             color: {text_color};
             font-weight: 600;
+        }}
+        .liability-value {{
+            color: #ee6666;
+        }}
+        .net-worth-value {{
+            color: #91cc75;
         }}
         .controls {{
             display: flex;
@@ -658,8 +687,8 @@ def generate_portfolio_page_html(
             .title {{
                 font-size: 20px;
             }}
-            .total {{
-                font-size: 14px;
+            .totals {{
+                font-size: 12px;
             }}
             .controls {{
                 flex-direction: column;
@@ -684,10 +713,15 @@ def generate_portfolio_page_html(
     <div class="container">
         <div class="header">
             <div class="title">Portfolio Dashboard</div>
-            <div class="total">Total: <span class="total-value">{formatted_total}</span></div>
+            <div class="totals">
+                <span class="total-item">Assets: <span class="total-value">{formatted_assets}</span></span>
+                {'<span class="total-separator">|</span><span class="total-item">Liabilities: <span class="total-value liability-value">' + formatted_liabilities + '</span></span><span class="total-separator">|</span><span class="total-item">Net Worth: <span class="total-value net-worth-value">' + formatted_net_worth + '</span></span>' if has_liabilities else ''}
+            </div>
         </div>
 
         <div class="controls">
+            {'<div class="control-group" id="viewToggleGroup"><span class="control-label">View:</span><div class="toggle-group" id="viewToggle"><button class="toggle-btn active" data-view="assets">Assets</button><button class="toggle-btn" data-view="liabilities">Liabilities</button></div></div>' if has_liabilities else ''}
+
             <div class="control-group">
                 <span class="control-label">Chart:</span>
                 <div class="toggle-group" id="chartTypeToggle">
@@ -696,7 +730,7 @@ def generate_portfolio_page_html(
                 </div>
             </div>
 
-            <div class="control-group">
+            <div class="control-group" id="groupByGroup">
                 <span class="control-label">Group by:</span>
                 <div class="toggle-group" id="groupByToggle">
                     <button class="toggle-btn active" data-group="ticker">Ticker</button>
@@ -715,10 +749,14 @@ def generate_portfolio_page_html(
         const groupedData = {grouped_json};
         const colors = {colors_json};
         const holdings = {holdings_json};
-        const total = {total_value};
+        const liabilitiesData = {liabilities_json};
+        const totalAssets = {total_value};
+        const totalLiabilities = {liabilities_total};
         const currencySymbol = '{currency_symbol}';
+        const hasLiabilities = {'true' if has_liabilities else 'false'};
 
         // State
+        let currentView = 'assets';
         let currentChartType = 'pie';
         let currentGroupBy = 'ticker';
 
@@ -739,11 +777,11 @@ def generate_portfolio_page_html(
             return num.toFixed(0);
         }}
 
-        function getChartOption(chartType, data) {{
+        function getChartOption(chartType, data, viewTotal) {{
             const chartData = data.map((item, i) => ({{
                 name: item.label,
                 value: item.value,
-                pct: ((item.value / total) * 100).toFixed(1),
+                pct: ((item.value / viewTotal) * 100).toFixed(1),
                 itemStyle: {{ color: colors[i % colors.length] }}
             }}));
 
@@ -775,16 +813,18 @@ def generate_portfolio_page_html(
                     fontSize: 13
                 }},
                 formatter: function(params) {{
-                    const pct = params.data.pct || ((params.value / total) * 100).toFixed(1);
+                    const pct = params.data.pct || ((params.value / viewTotal) * 100).toFixed(1);
                     let html = '<div style="font-weight: 600; margin-bottom: 4px;">' + params.name + '</div>' +
                            '<div style="color: {"#94a3b8" if theme == "dark" else "#64748b"}; font-size: 12px;">Value: <span style="color: {text_color}; font-weight: 500;">' + currencySymbol + formatNumber(params.value) + '</span></div>' +
                            '<div style="color: {"#94a3b8" if theme == "dark" else "#64748b"}; font-size: 12px;">Share: <span style="color: {text_color}; font-weight: 500;">' + pct + '%</span></div>';
 
-                    // Add ticker breakdown for grouped views
-                    const tickers = getTickersForGroup(currentGroupBy, params.name);
-                    if (tickers.length > 0) {{
-                        const tickerLines = tickers.map(t => t.label + ': ' + currencySymbol + formatNumber(t.value)).join('<br>');
-                        html += '<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid {"#334155" if theme == "dark" else "#e2e8f0"}; color: {"#94a3b8" if theme == "dark" else "#64748b"}; font-size: 11px;"><div style="margin-bottom: 4px;">Breakdown:</div><div style="color: {text_color};">' + tickerLines + '</div></div>';
+                    // Add ticker breakdown for grouped views (assets only)
+                    if (currentView === 'assets') {{
+                        const tickers = getTickersForGroup(currentGroupBy, params.name);
+                        if (tickers.length > 0) {{
+                            const tickerLines = tickers.map(t => t.label + ': ' + currencySymbol + formatNumber(t.value)).join('<br>');
+                            html += '<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid {"#334155" if theme == "dark" else "#e2e8f0"}; color: {"#94a3b8" if theme == "dark" else "#64748b"}; font-size: 11px;"><div style="margin-bottom: 4px;">Breakdown:</div><div style="color: {text_color};">' + tickerLines + '</div></div>';
+                        }}
                     }}
 
                     return html;
@@ -883,7 +923,7 @@ def generate_portfolio_page_html(
                         label: {{
                             show: true,
                             formatter: function(params) {{
-                                const pct = params.data.pct || ((params.value / total) * 100).toFixed(1);
+                                const pct = params.data.pct || ((params.value / viewTotal) * 100).toFixed(1);
                                 if (parseFloat(pct) < 3) return '';
                                 return params.name + '\\n' + pct + '%';
                             }},
@@ -916,12 +956,43 @@ def generate_portfolio_page_html(
         }}
 
         function updateChart() {{
-            const data = groupedData[currentGroupBy] || [];
-            const option = getChartOption(currentChartType, data);
+            let data, viewTotal;
+
+            if (currentView === 'liabilities') {{
+                // Liabilities view - simple list, no grouping
+                data = liabilitiesData;
+                viewTotal = totalLiabilities;
+            }} else {{
+                // Assets view - use grouping
+                data = groupedData[currentGroupBy] || [];
+                viewTotal = totalAssets;
+            }}
+
+            const option = getChartOption(currentChartType, data, viewTotal);
             chart.setOption(option, true);
+
+            // Show/hide groupBy toggle based on view
+            const groupByGroup = document.getElementById('groupByGroup');
+            if (groupByGroup) {{
+                groupByGroup.style.display = currentView === 'liabilities' ? 'none' : 'flex';
+            }}
         }}
 
         // Event handlers for toggles
+        if (hasLiabilities) {{
+            const viewToggle = document.getElementById('viewToggle');
+            if (viewToggle) {{
+                viewToggle.addEventListener('click', function(e) {{
+                    if (e.target.classList.contains('toggle-btn')) {{
+                        this.querySelectorAll('.toggle-btn').forEach(btn => btn.classList.remove('active'));
+                        e.target.classList.add('active');
+                        currentView = e.target.dataset.view;
+                        updateChart();
+                    }}
+                }});
+            }}
+        }}
+
         document.getElementById('chartTypeToggle').addEventListener('click', function(e) {{
             if (e.target.classList.contains('toggle-btn')) {{
                 this.querySelectorAll('.toggle-btn').forEach(btn => btn.classList.remove('active'));

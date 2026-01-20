@@ -16,7 +16,7 @@ from helpers.chart_templates import (
     generate_portfolio_page_html,
 )
 from helpers.pricing import get_live_price, get_fx_rate_cached
-from helpers.portfolio import load_portfolios
+from helpers.portfolio import load_portfolios, load_liabilities
 from helpers.classification import get_classification, get_option_display_label
 from tools.snaptrade import get_snaptrade_client
 
@@ -247,6 +247,47 @@ def _collect_portfolio_data(reporting_currency: Optional[str] = None) -> tuple[l
     return holdings_data, fx_cache
 
 
+def _collect_liabilities_data(reporting_currency: Optional[str] = None) -> tuple[list[dict], float]:
+    """
+    Collect liabilities data for visualization.
+
+    Returns:
+        (liabilities_data, total) - List of liabilities for chart and total balance
+    """
+    liabilities_data = []
+    fx_cache = {}
+
+    try:
+        liabilities = load_liabilities()
+
+        for liability in liabilities:
+            balance = liability.get("balance", 0)
+            curr = liability.get("currency", "USD")
+
+            # Convert to reporting currency if specified
+            if reporting_currency and curr and curr != reporting_currency and balance:
+                fx = get_fx_rate_cached(curr, reporting_currency, fx_cache)
+                if fx:
+                    balance = balance * fx
+
+            if balance > 0:
+                liabilities_data.append({
+                    "label": liability.get("name", "Unknown"),
+                    "value": balance,
+                    "type": liability.get("type", "other"),
+                    "interest_rate": liability.get("interest_rate"),
+                })
+    except Exception:
+        pass
+
+    # Sort by balance descending
+    liabilities_data.sort(key=lambda l: l.get("value", 0), reverse=True)
+
+    total = sum(l.get("value", 0) for l in liabilities_data)
+
+    return liabilities_data, total
+
+
 def register_visualization_tools(server):
     """Register unified visualization tools with the server."""
 
@@ -347,11 +388,12 @@ def register_visualization_tools(server):
         else:
             # Portfolio dashboard
             holdings_data, _ = _collect_portfolio_data(currency)
+            liabilities_data, liabilities_total = _collect_liabilities_data(currency)
 
-            if not holdings_data:
+            if not holdings_data and not liabilities_data:
                 return json.dumps({
-                    "error": "No holdings data found",
-                    "hint": "Connect a brokerage with add_portfolio(type='synced') or create manual portfolios with add_portfolio(type='manual')"
+                    "error": "No holdings or liabilities data found",
+                    "hint": "Connect a brokerage with add_portfolio(type='synced'), create manual portfolios with add_portfolio(type='manual'), or add liabilities with add_liability()"
                 })
 
             # Build grouped data for all dimensions
@@ -373,6 +415,7 @@ def register_visualization_tools(server):
             }
 
             total_value = sum(item.get("value", 0) for item in holdings_data)
+            net_worth = total_value - liabilities_total
             display_currency = currency or "USD"
 
             html = generate_portfolio_page_html(
@@ -381,6 +424,8 @@ def register_visualization_tools(server):
                 total_value=total_value,
                 currency=display_currency,
                 theme=theme,
+                liabilities_data=liabilities_data,
+                liabilities_total=liabilities_total,
             )
 
             chart_id = str(uuid.uuid4())[:8]
@@ -396,8 +441,11 @@ def register_visualization_tools(server):
                 "type": "portfolio",
                 "theme": theme,
                 "currency": display_currency,
-                "total_value": round(total_value, 2),
+                "total_assets": round(total_value, 2),
+                "total_liabilities": round(liabilities_total, 2),
+                "net_worth": round(net_worth, 2),
                 "holdings_count": len(holdings_data),
+                "liabilities_count": len(liabilities_data),
                 "groupings": {
                     "ticker": len(grouped_data["ticker"]),
                     "name": len(grouped_data["name"]),

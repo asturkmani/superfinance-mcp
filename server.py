@@ -41,6 +41,17 @@ Single interface for both manual portfolios and synced brokerage accounts:
 Manual portfolios: User-managed, supports private equity (.PVT suffix), manual pricing.
 Synced portfolios: Read-only positions from connected brokerages via SnapTrade.
 
+## Liabilities Tracking
+
+Track debts for net worth calculations:
+
+- list_liabilities(): List all liabilities with total balance.
+- add_liability(name, balance, type?, interest_rate?, currency?, notes?): Add mortgage, loan, credit card, etc.
+- update_liability(liability_id, ...): Update balance or other details.
+- remove_liability(liability_id): Remove a liability.
+
+Types: mortgage, auto_loan, credit_card, student_loan, personal_loan, line_of_credit, other.
+
 ## Classification Management
 
 Override AI-generated classifications for custom groupings:
@@ -60,6 +71,7 @@ Use update_classifications() to:
 Single chart() tool for all visualizations:
 
 - chart(type="portfolio"): Interactive dashboard with pie/treemap toggle, groupings by ticker/name/category/brokerage.
+  Shows Assets/Liabilities toggle when liabilities exist, with Net Worth summary in header.
 - chart(type="price", tickers="AAPL"): TradingView chart with live market data.
 - chart(type="price", tickers="AAPL,MSFT,GOOG"): Compare multiple tickers.
 
