@@ -152,6 +152,7 @@ def register_holdings_tools(server):
                             "price": round(price, 4) if price else None,
                             "price_source": price_source,
                             "market_value": round(market_value, 2) if market_value else None,
+                            "equity_value": round(market_value, 2) if market_value else None,  # Will be adjusted for margin below
                             "average_cost": round(avg_cost, 4) if avg_cost else None,
                             "cost_basis": round(cost_basis, 2) if cost_basis else None,
                             "unrealized_pnl": round(pnl, 2) if pnl else None,
@@ -233,6 +234,7 @@ def register_holdings_tools(server):
                             "currency": curr,
                             "price": snap_price,
                             "market_value": round(market_value, 2) if market_value else None,
+                            "equity_value": round(market_value, 2) if market_value else None,  # Will be adjusted for margin below
                             "average_cost": avg_cost,
                             "cost_basis": round(cost_basis, 2) if cost_basis else None,
                             "unrealized_pnl": round(pnl, 2) if pnl else None,
@@ -267,6 +269,33 @@ def register_holdings_tools(server):
                         account_value[c] = account_value.get(c, 0) + v
                     for c, v in account_cash.items():
                         account_value[c] = account_value.get(c, 0) + v
+
+                    # Calculate equity ratio per currency (to account for margin)
+                    # When cash is negative (margin), equity = holdings + cash < holdings
+                    equity_ratio = {}
+                    for c in account_holdings:
+                        holdings_val = account_holdings.get(c, 0)
+                        equity_val = account_value.get(c, 0)
+                        if holdings_val > 0:
+                            equity_ratio[c] = equity_val / holdings_val
+                        else:
+                            equity_ratio[c] = 1.0
+
+                    # Add equity_value to each position (market_value adjusted for margin)
+                    for pos_data in positions:
+                        curr = pos_data.get("currency")
+                        market_value = pos_data.get("market_value")
+                        if curr and market_value:
+                            ratio = equity_ratio.get(curr, 1.0)
+                            pos_data["equity_value"] = round(market_value * ratio, 2)
+
+                    # Add equity_value to each option
+                    for opt_data in options:
+                        curr = opt_data.get("currency")
+                        market_value = opt_data.get("market_value")
+                        if curr and market_value:
+                            ratio = equity_ratio.get(curr, 1.0)
+                            opt_data["equity_value"] = round(market_value * ratio, 2)
 
                     # Calculate unrealized P&L
                     account_pnl = {}
@@ -438,6 +467,7 @@ def register_holdings_tools(server):
                             "price": round(live_price, 2) if live_price else None,
                             "price_source": price_source,
                             "market_value": round(market_value, 2) if market_value else None,
+                            "equity_value": round(market_value, 2) if market_value else None,  # Same as market_value (no margin in manual portfolios)
                             "average_cost": avg_cost,
                             "cost_basis": round(cost_basis, 2) if cost_basis else None,
                             "unrealized_pnl": round(pnl, 2) if pnl else None,
