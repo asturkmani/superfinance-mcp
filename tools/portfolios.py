@@ -12,7 +12,6 @@ from typing import Optional, Literal
 
 from helpers.portfolio import (
     load_portfolios,
-    save_portfolios,
     generate_position_id,
     load_liabilities,
     save_liability as _save_liability,
@@ -28,6 +27,8 @@ from helpers.classification import (
     add_category as _add_category,
 )
 from tools.snaptrade import get_snaptrade_client
+from db import queries
+from services.portfolio_service import PortfolioService
 
 
 def _get_snaptrade_credentials():
@@ -38,11 +39,11 @@ def _get_snaptrade_credentials():
     )
 
 
-def _get_manual_portfolios_summary() -> list[dict]:
+def _get_manual_portfolios_summary(user_id: Optional[str] = None) -> list[dict]:
     """Get summary of all manual portfolios."""
     portfolios = []
     try:
-        data = load_portfolios()
+        data = load_portfolios(user_id)
         for pid, portfolio in data.get("portfolios", {}).items():
             # Calculate total value
             total_value = 0
@@ -124,17 +125,19 @@ def _get_synced_portfolios_summary() -> list[dict]:
     return portfolios
 
 
-def _find_portfolio(portfolio_id: str) -> tuple[Optional[str], Optional[dict]]:
+def _find_portfolio(portfolio_id: str, user_id: Optional[str] = None) -> tuple[Optional[str], Optional[dict]]:
     """
     Find a portfolio by ID and return its type and data.
 
     Returns: (type, data) where type is "manual" or "synced", or (None, None) if not found.
     """
-    # Check manual portfolios first
+    # Check manual portfolios first (SQLite)
     try:
-        data = load_portfolios()
-        if portfolio_id in data.get("portfolios", {}):
-            return ("manual", data["portfolios"][portfolio_id])
+        account = queries.get_account(portfolio_id)
+        if account and account.get('is_manual'):
+            data = load_portfolios(user_id)
+            if portfolio_id in data.get("portfolios", {}):
+                return ("manual", data["portfolios"][portfolio_id])
     except Exception:
         pass
 
@@ -913,7 +916,7 @@ def register_portfolio_tools(server):
             return json.dumps({"error": str(e)}, indent=2)
 
     @server.tool()
-    def get_transactions(
+    def get_snaptrade_transactions(
         portfolio_id: str,
         start_date: str,
         end_date: str,

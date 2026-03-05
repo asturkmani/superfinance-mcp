@@ -4,10 +4,14 @@ from services.yahoo_finance_service import YahooFinanceService
 from services.snaptrade_service import SnapTradeService
 from services.holdings_service import HoldingsService
 from services.portfolio_service import PortfolioService
+from services.universe import UniverseService
+from services.analytics import AnalyticsService
 
 __all__ = [
     "YahooFinanceService",
     "SnapTradeService",
     "HoldingsService",
     "PortfolioService",
+    "UniverseService",
+    "AnalyticsService",
 ]

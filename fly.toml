@@ -5,6 +5,7 @@ primary_region = 'ams'
 
 [env]
   SUPERFINANCE_PORTFOLIO_FILE = "/data/portfolios.json"
+  SUPERFINANCE_DB_PATH = "/data/vault.db"
   # Cache TTL configuration (in seconds)
   CACHE_HOLDINGS_TTL = "90000"      # 25 hours
   CACHE_PRICES_TTL = "600"          # 10 minutes

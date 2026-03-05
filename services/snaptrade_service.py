@@ -1,9 +1,18 @@
 """SnapTrade service - core business logic for brokerage integration."""
 
 import os
+import json
 from typing import Optional
+from datetime import datetime
 
 from snaptrade_client import SnapTrade
+from db import queries
+from helpers.transaction_types import (
+    map_snaptrade_type,
+    get_option_multiplier,
+    format_option_symbol,
+    detect_short_or_cover
+)
 
 
 # Singleton client
@@ -167,7 +176,8 @@ class SnapTradeService:
                     "number": account.get("number"),
                     "institution": account.get("institution_name"),
                     "balance": account.get("balance"),
-                    "meta": account.get("meta", {})
+                    "meta": account.get("meta", {}),
+                    "sync_status": account.get("sync_status", {}),
                 })
 
             return {
@@ -263,6 +273,132 @@ class SnapTradeService:
             return {"error": str(e)}
 
     @staticmethod
+    async def get_option_positions(
+        account_id: str,
+        user_id: Optional[str] = None,
+        user_secret: Optional[str] = None
+    ) -> dict:
+        """
+        Get option positions for a specific account.
+        
+        Note: The SnapTrade API may include option positions in the regular
+        get_user_holdings response. This method extracts them specifically.
+        
+        Args:
+            account_id: The account ID
+            user_id: SnapTrade user ID
+            user_secret: SnapTrade user secret
+            
+        Returns:
+            dict with option positions
+        """
+        client = get_snaptrade_client()
+        if not client:
+            return {"error": "SnapTrade not configured"}
+        
+        try:
+            user_id, user_secret = SnapTradeService._get_credentials(user_id, user_secret)
+            if not user_id or not user_secret:
+                return {"error": "Credentials required"}
+            
+            # For now, use get_user_holdings and filter for options
+            # The SnapTrade API typically includes options in the holdings response
+            response = client.account_information.get_user_holdings(
+                account_id=account_id,
+                user_id=user_id,
+                user_secret=user_secret
+            )
+            
+            holdings = response.body if hasattr(response, 'body') else response
+            if hasattr(holdings, 'to_dict'):
+                holdings = holdings.to_dict()
+            
+            def safe_get(obj, key, default=None):
+                if isinstance(obj, dict):
+                    return obj.get(key, default)
+                return getattr(obj, key, default)
+            
+            option_positions = []
+            
+            # First check the dedicated option_positions field
+            raw_options = safe_get(holdings, "option_positions", [])
+            for opt in raw_options:
+                if hasattr(opt, 'to_dict'):
+                    opt = opt.to_dict()
+                option_positions.append(opt)
+            
+            # Also check regular positions for any with option_symbol
+            if not option_positions:
+                positions = safe_get(holdings, "positions", [])
+                for position in positions:
+                    if hasattr(position, 'to_dict'):
+                        position = position.to_dict()
+                    symbol_obj = safe_get(position, "symbol", {})
+                    if hasattr(symbol_obj, 'to_dict'):
+                        symbol_obj = symbol_obj.to_dict()
+                    option_symbol = safe_get(symbol_obj, "option_symbol")
+                    if option_symbol:
+                        option_positions.append(position)
+            
+            return {
+                "success": True,
+                "option_positions": option_positions
+            }
+        except Exception as e:
+            return {"error": str(e)}
+    
+    @staticmethod
+    async def get_account_balances(
+        account_id: str,
+        user_id: Optional[str] = None,
+        user_secret: Optional[str] = None
+    ) -> dict:
+        """
+        Get account balances (cash positions).
+        
+        Args:
+            account_id: The account ID
+            user_id: SnapTrade user ID
+            user_secret: SnapTrade user secret
+            
+        Returns:
+            dict with account balances
+        """
+        client = get_snaptrade_client()
+        if not client:
+            return {"error": "SnapTrade not configured"}
+        
+        try:
+            user_id, user_secret = SnapTradeService._get_credentials(user_id, user_secret)
+            if not user_id or not user_secret:
+                return {"error": "Credentials required"}
+            
+            # Use get_user_holdings which includes balances
+            response = client.account_information.get_user_holdings(
+                account_id=account_id,
+                user_id=user_id,
+                user_secret=user_secret
+            )
+            
+            holdings = response.body if hasattr(response, 'body') else response
+            if hasattr(holdings, 'to_dict'):
+                holdings = holdings.to_dict()
+            
+            def safe_get(obj, key, default=None):
+                if isinstance(obj, dict):
+                    return obj.get(key, default)
+                return getattr(obj, key, default)
+            
+            balances = safe_get(holdings, "balances", [])
+            
+            return {
+                "success": True,
+                "balances": balances
+            }
+        except Exception as e:
+            return {"error": str(e)}
+    
+    @staticmethod
     def _safe_get(obj, key, default=None):
         """Safely get a value from dict-like objects or SnapTrade schema objects."""
         if obj is None:
@@ -289,15 +425,59 @@ class SnapTradeService:
         symbol_obj = safe_get(activity, "symbol")
         symbol = None
         symbol_description = None
+        is_option = False
+        
         if symbol_obj:
             symbol = safe_get(symbol_obj, "symbol")
             symbol_description = safe_get(symbol_obj, "description")
+            
+            # Check if this has option_symbol nested object
+            option_symbol_obj = safe_get(symbol_obj, "option_symbol")
+            if option_symbol_obj:
+                is_option = True
+                # Extract option details for symbol formatting
+                underlying_obj = safe_get(option_symbol_obj, "underlying_symbol", {})
+                underlying = safe_get(underlying_obj, "symbol", "UNKNOWN")
+                strike = safe_get(option_symbol_obj, "strike_price")
+                opt_type = safe_get(option_symbol_obj, "option_type")
+                expiry = safe_get(option_symbol_obj, "expiration_date")
+                ticker = safe_get(option_symbol_obj, "ticker")
+                
+                # Use formatted option symbol
+                symbol = format_option_symbol(
+                    underlying=underlying,
+                    strike=strike,
+                    option_type=opt_type,
+                    expiry=expiry,
+                    ticker=ticker
+                )
+                
+                if not symbol_description and ticker:
+                    symbol_description = ticker
 
-        # Extract nested option_symbol object
+        # Legacy: also check for option_symbol at activity level
         option_symbol_obj = safe_get(activity, "option_symbol")
         option_symbol = None
-        if option_symbol_obj:
+        if option_symbol_obj and not is_option:
+            is_option = True
             option_symbol = safe_get(option_symbol_obj, "description") or safe_get(option_symbol_obj, "id")
+            
+            # Try to format symbol from option_symbol object
+            underlying_obj = safe_get(option_symbol_obj, "underlying_symbol", {})
+            underlying = safe_get(underlying_obj, "symbol", "UNKNOWN")
+            strike = safe_get(option_symbol_obj, "strike_price")
+            opt_type = safe_get(option_symbol_obj, "option_type")
+            expiry = safe_get(option_symbol_obj, "expiration_date")
+            ticker = safe_get(option_symbol_obj, "ticker")
+            
+            if not symbol:
+                symbol = format_option_symbol(
+                    underlying=underlying,
+                    strike=strike,
+                    option_type=opt_type,
+                    expiry=expiry,
+                    ticker=ticker
+                )
 
         # Extract nested currency object
         currency_obj = safe_get(activity, "currency")
@@ -331,6 +511,7 @@ class SnapTradeService:
             "symbol_description": symbol_description,
             "option_symbol": option_symbol,
             "option_type": safe_get(activity, "option_type"),
+            "is_option": is_option,
             "description": safe_get(activity, "description"),
             "trade_date": str(safe_get(activity, "trade_date")) if safe_get(activity, "trade_date") else None,
             "settlement_date": str(safe_get(activity, "settlement_date")) if safe_get(activity, "settlement_date") else None,
@@ -580,5 +761,416 @@ class SnapTradeService:
                 "message": "Refresh scheduled",
                 "detail": data.get("detail") if isinstance(data, dict) else str(data)
             }
+        except Exception as e:
+            return {"error": str(e)}
+
+    @staticmethod
+    async def sync_to_db(
+        vault_user_id: str,
+        snaptrade_user_id: Optional[str] = None,
+        snaptrade_user_secret: Optional[str] = None
+    ) -> dict:
+        """
+        Full sync: fetch accounts + holdings + transactions from SnapTrade, persist to SQLite.
+        
+        Args:
+            vault_user_id: Vault user ID (for SQLite)
+            snaptrade_user_id: SnapTrade user ID
+            snaptrade_user_secret: SnapTrade user secret
+            
+        Returns:
+            dict with sync summary
+        """
+        from datetime import timedelta
+        
+        client = get_snaptrade_client()
+        if not client:
+            return {"error": "SnapTrade not configured"}
+        
+        try:
+            snaptrade_user_id, snaptrade_user_secret = SnapTradeService._get_credentials(
+                snaptrade_user_id, snaptrade_user_secret
+            )
+            if not snaptrade_user_id or not snaptrade_user_secret:
+                return {"error": "Credentials required"}
+            
+            # Fetch accounts
+            accounts_result = await SnapTradeService.list_accounts(
+                snaptrade_user_id, snaptrade_user_secret
+            )
+            
+            if not accounts_result.get("success"):
+                return accounts_result
+            
+            synced_accounts = 0
+            synced_holdings = 0
+            synced_transactions = 0
+            cleaned_stale = 0
+            errors = []
+            
+            for account_data in accounts_result.get("accounts", []):
+                account_id = account_data.get("account_id")
+                if not account_id:
+                    continue
+                
+                try:
+                    # Extract metadata
+                    institution_name = account_data.get("institution", "Unknown")
+                    brokerage_auth = account_data.get("brokerage_authorization")
+                    meta = account_data.get("meta", {})
+                    account_type = meta.get("type") if isinstance(meta, dict) else None
+                    
+                    # Extract sync_status from SnapTrade
+                    sync_status = account_data.get("sync_status", {})
+                    holdings_sync_info = sync_status.get("holdings", {}) if isinstance(sync_status, dict) else {}
+                    transactions_sync_info = sync_status.get("transactions", {}) if isinstance(sync_status, dict) else {}
+                    holdings_synced = bool(holdings_sync_info.get("initial_sync_completed", False))
+                    transactions_synced = bool(transactions_sync_info.get("initial_sync_completed", False))
+                    
+                    # Extract currency from balance if available
+                    balance_data = account_data.get("balance")
+                    currency = "USD"  # default
+                    if balance_data:
+                        if isinstance(balance_data, dict):
+                            currency = balance_data.get("currency", "USD")
+                        elif hasattr(balance_data, "currency"):
+                            currency = getattr(balance_data, "currency", "USD")
+                    
+                    # Upsert brokerage
+                    brokerage_id = queries.upsert_brokerage(
+                        provider="snaptrade",
+                        provider_institution_id=institution_name,
+                        name=institution_name
+                    )
+                    
+                    # Create or get connection (using brokerage_authorization as provider_account_id)
+                    connection_id = None
+                    if brokerage_auth:
+                        existing_connection = queries.get_connection_by_provider_account_id(brokerage_auth)
+                        if existing_connection:
+                            connection_id = existing_connection["id"]
+                        else:
+                            connection_id = queries.create_connection(
+                                user_id=vault_user_id,
+                                provider_account_id=brokerage_auth,
+                                brokerage_id=brokerage_id,
+                                status="active"
+                            )
+                    
+                    # Create or update account in SQLite
+                    existing = queries.get_account(account_id)
+                    now = datetime.utcnow().isoformat() + "Z"
+                    if existing:
+                        # Update sync flags and timestamp
+                        from db.database import get_db
+                        conn = get_db()
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE accounts 
+                            SET holdings_synced = ?, transactions_synced = ?, 
+                                last_sync_at = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE id = ?
+                        """, (int(holdings_synced), int(transactions_synced), now, account_id))
+                        conn.commit()
+                    else:
+                        # Create new account with SnapTrade account ID directly
+                        queries.create_account(
+                            user_id=vault_user_id,
+                            name=account_data.get("name", "Unknown Account"),
+                            account_id=account_id,
+                            connection_id=connection_id,
+                            account_type=account_type,
+                            currency=currency,
+                            is_manual=False,
+                            last_sync_at=now
+                        )
+                        # Set sync flags
+                        from db.database import get_db
+                        conn = get_db()
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE accounts 
+                            SET holdings_synced = ?, transactions_synced = ?
+                            WHERE id = ?
+                        """, (int(holdings_synced), int(transactions_synced), account_id))
+                        conn.commit()
+                    
+                    synced_accounts += 1
+                    
+                    # Fetch and persist holdings (equity positions)
+                    holdings_result = await SnapTradeService.get_holdings(
+                        account_id, snaptrade_user_id, snaptrade_user_secret
+                    )
+                    
+                    seen_symbols = set()
+                    
+                    if holdings_result.get("success"):
+                        for position in holdings_result.get("positions", []):
+                            # symbol can be a nested dict from SnapTrade API
+                            raw_symbol = position.get("symbol")
+                            if not raw_symbol:
+                                continue
+                            
+                            # Extract ticker string and metadata from nested dict
+                            if isinstance(raw_symbol, dict):
+                                symbol = raw_symbol.get("symbol") or raw_symbol.get("raw_symbol")
+                                description = raw_symbol.get("description")
+                                currency_obj = raw_symbol.get("currency")
+                                pos_currency = currency_obj.get("code") if isinstance(currency_obj, dict) else "USD"
+                                asset_type_obj = raw_symbol.get("type")
+                                asset_type = asset_type_obj.get("description") if isinstance(asset_type_obj, dict) else None
+                            else:
+                                symbol = raw_symbol
+                                description = position.get("description")
+                                pos_currency = position.get("currency", "USD")
+                                asset_type = None
+                            
+                            if not symbol:
+                                continue
+                            
+                            seen_symbols.add(symbol)
+                            
+                            # Extract values
+                            quantity = position.get("units") or position.get("fractional_units")
+                            current_price = position.get("price")
+                            
+                            # Compute market_value
+                            market_value = None
+                            if quantity is not None and current_price is not None:
+                                market_value = quantity * current_price
+                            
+                            # Try to extract average_cost from open_pnl if available
+                            average_cost = None
+                            open_pnl = position.get("open_pnl")
+                            if open_pnl is not None and quantity is not None and quantity != 0:
+                                if current_price is not None:
+                                    average_cost = current_price - (open_pnl / quantity)
+                            
+                            queries.upsert_holding(
+                                account_id=account_id,
+                                symbol=symbol,
+                                name=description,
+                                quantity=quantity,
+                                average_cost=average_cost,
+                                current_price=current_price,
+                                market_value=market_value,
+                                currency=pos_currency,
+                                asset_type=asset_type
+                            )
+                            synced_holdings += 1
+                    
+                    # Fetch and persist option positions
+                    options_result = await SnapTradeService.get_option_positions(
+                        account_id, snaptrade_user_id, snaptrade_user_secret
+                    )
+                    
+                    if options_result.get("success"):
+                        for position in options_result.get("option_positions", []):
+                            raw_symbol = position.get("symbol")
+                            if not raw_symbol:
+                                continue
+                            
+                            # Extract option symbol object
+                            if isinstance(raw_symbol, dict):
+                                option_symbol_obj = raw_symbol.get("option_symbol")
+                                if not option_symbol_obj:
+                                    continue
+                                
+                                # Extract option details
+                                underlying_obj = option_symbol_obj.get("underlying_symbol", {})
+                                underlying = underlying_obj.get("symbol", "UNKNOWN") if isinstance(underlying_obj, dict) else "UNKNOWN"
+                                strike = option_symbol_obj.get("strike_price")
+                                opt_type = option_symbol_obj.get("option_type")  # 'CALL' or 'PUT'
+                                expiry = option_symbol_obj.get("expiration_date")
+                                ticker = option_symbol_obj.get("ticker")
+                                is_mini = option_symbol_obj.get("is_mini_option", False)
+                                
+                                # Format symbol
+                                symbol = format_option_symbol(
+                                    underlying=underlying,
+                                    strike=strike,
+                                    option_type=opt_type,
+                                    expiry=expiry,
+                                    ticker=ticker
+                                )
+                                
+                                description = ticker or symbol
+                                currency_obj = raw_symbol.get("currency")
+                                pos_currency = currency_obj.get("code") if isinstance(currency_obj, dict) else "USD"
+                            else:
+                                continue
+                            
+                            seen_symbols.add(symbol)
+                            
+                            # Extract values
+                            quantity = position.get("units") or position.get("fractional_units")
+                            current_price = position.get("price")
+                            
+                            # Compute market_value with option multiplier
+                            market_value = None
+                            if quantity is not None and current_price is not None:
+                                multiplier = get_option_multiplier(is_mini)
+                                market_value = quantity * current_price * multiplier
+                            
+                            # Try to extract average_cost from open_pnl
+                            average_cost = None
+                            open_pnl = position.get("open_pnl")
+                            if open_pnl is not None and quantity is not None and quantity != 0:
+                                if current_price is not None:
+                                    multiplier = get_option_multiplier(is_mini)
+                                    average_cost = current_price - (open_pnl / (quantity * multiplier))
+                            
+                            # Store option metadata
+                            metadata = {
+                                "underlying_symbol": underlying,
+                                "strike": strike,
+                                "option_type": opt_type,
+                                "expiration_date": expiry,
+                                "is_mini_option": is_mini
+                            }
+                            
+                            queries.upsert_holding(
+                                account_id=account_id,
+                                symbol=symbol,
+                                name=description,
+                                quantity=quantity,
+                                average_cost=average_cost,
+                                current_price=current_price,
+                                market_value=market_value,
+                                currency=pos_currency,
+                                asset_type='option',
+                                metadata=metadata
+                            )
+                            synced_holdings += 1
+                    
+                    # Fetch and persist cash balances
+                    balances_result = await SnapTradeService.get_account_balances(
+                        account_id, snaptrade_user_id, snaptrade_user_secret
+                    )
+                    
+                    if balances_result.get("success"):
+                        for balance in balances_result.get("balances", []):
+                            # Extract cash amount
+                            cash = balance.get("cash") if isinstance(balance, dict) else getattr(balance, "cash", None)
+                            if not cash or cash == 0:
+                                continue
+                            
+                            # Extract currency
+                            currency_obj = balance.get("currency") if isinstance(balance, dict) else getattr(balance, "currency", None)
+                            if isinstance(currency_obj, dict):
+                                currency_code = currency_obj.get("code", "USD")
+                            elif currency_obj:
+                                currency_code = getattr(currency_obj, "code", "USD")
+                            else:
+                                currency_code = "USD"
+                            
+                            # Create cash holding
+                            symbol = currency_code
+                            seen_symbols.add(symbol)
+                            
+                            queries.upsert_holding(
+                                account_id=account_id,
+                                symbol=symbol,
+                                name=f"{currency_code} Cash",
+                                quantity=cash,
+                                average_cost=1.0,
+                                current_price=1.0,
+                                market_value=cash,
+                                currency=currency_code,
+                                asset_type='cash'
+                            )
+                            synced_holdings += 1
+                    
+                    # Remove stale holdings (positions that no longer exist at broker)
+                    deleted = queries.delete_stale_holdings(account_id, seen_symbols)
+                    cleaned_stale += deleted
+                    
+                    # Fetch and persist transactions (full history, paginated)
+                    end_date = datetime.utcnow().strftime("%Y-%m-%d")
+                    start_date = "2020-01-01"
+                    
+                    all_transactions = []
+                    offset = 0
+                    page_size = 1000
+                    while True:
+                        txn_result = await SnapTradeService.get_transactions(
+                            account_id, start_date, end_date,
+                            snaptrade_user_id, snaptrade_user_secret,
+                            offset=offset, limit=page_size
+                        )
+                        if not txn_result.get("success"):
+                            break
+                        page = txn_result.get("transactions", [])
+                        all_transactions.extend(page)
+                        if len(page) < page_size:
+                            break
+                        offset += page_size
+                    
+                    for txn in all_transactions:
+                            # Determine external_id for deduplication
+                            external_id = txn.get("id") or txn.get("external_reference_id")
+                            
+                            # Skip if no symbol (some transactions like deposits don't have symbols)
+                            symbol = txn.get("symbol")
+                            if not symbol:
+                                symbol = "CASH"  # Use placeholder for cash transactions
+                            
+                            # Extract transaction date
+                            txn_date = txn.get("trade_date")
+                            if not txn_date:
+                                txn_date = txn.get("settlement_date")
+                            if not txn_date:
+                                continue  # Skip if no date
+                            
+                            # Convert to YYYY-MM-DD format
+                            if isinstance(txn_date, str):
+                                txn_date = txn_date.split("T")[0]  # Remove time portion if present
+                            
+                            # Map SnapTrade transaction type to canonical type
+                            st_type = txn.get("type", "")
+                            transaction_type = map_snaptrade_type(st_type)
+                            
+                            # Detect short/cover based on quantity
+                            quantity = txn.get("units")
+                            is_option = txn.get("is_option", False)
+                            transaction_type = detect_short_or_cover(
+                                transaction_type,
+                                quantity,
+                                is_option
+                            )
+                            
+                            # Create transaction (will deduplicate based on external_id)
+                            queries.create_transaction(
+                                account_id=account_id,
+                                symbol=symbol,
+                                date=txn_date,
+                                transaction_type=transaction_type,
+                                name=txn.get("symbol_description"),
+                                quantity=abs(quantity) if quantity else None,  # Store absolute value
+                                price=txn.get("price"),
+                                fees=txn.get("fee") or 0.0,
+                                currency=txn.get("currency", "USD"),
+                                source="snaptrade",
+                                external_id=external_id
+                            )
+                            synced_transactions += 1
+                    
+                except Exception as e:
+                    errors.append(f"Account {account_id}: {str(e)}")
+            
+            result = {
+                "success": True,
+                "synced_accounts": synced_accounts,
+                "synced_holdings": synced_holdings,
+                "synced_transactions": synced_transactions,
+                "cleaned_stale_holdings": cleaned_stale,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
+            
+            if errors:
+                result["errors"] = errors
+            
+            return result
+            
         except Exception as e:
             return {"error": str(e)}

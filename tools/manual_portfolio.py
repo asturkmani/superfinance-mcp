@@ -1,21 +1,22 @@
-"""Manual portfolio tools for tracking private investments."""
+"""Manual portfolio tools - SQLite-backed portfolio management."""
 
 import json
-from datetime import datetime
 from typing import Optional
 
-from helpers.portfolio import load_portfolios, save_portfolios, generate_position_id
-from helpers.pricing import get_live_price, get_fx_rate_cached
+from services.portfolio_service import PortfolioService
+from db import queries
+from helpers.user_context import get_current_user_id
 
 
 def register_manual_portfolio_tools(server):
     """Register all manual portfolio tools with the server."""
 
     @server.tool()
-    def manual_create_portfolio(
+    async def manual_create_portfolio(
         portfolio_id: str,
         name: str,
-        description: Optional[str] = None
+        description: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> str:
         """
         Create a new manual portfolio for tracking private investments.
@@ -30,43 +31,25 @@ def register_manual_portfolio_tools(server):
             portfolio_id: Unique identifier for the portfolio (e.g., "private-equity", "real-estate")
             name: Display name for the portfolio (e.g., "Private Equity Holdings")
             description: Optional description of the portfolio
+            user_id: Optional user ID (uses default user if not provided)
 
         Returns:
             JSON string confirming portfolio creation
         """
-        try:
-            data = load_portfolios()
-
-            if portfolio_id in data["portfolios"]:
-                return json.dumps({
-                    "error": f"Portfolio '{portfolio_id}' already exists",
-                    "message": "Use a different portfolio_id or delete the existing one first"
-                }, indent=2)
-
-            data["portfolios"][portfolio_id] = {
-                "name": name,
-                "description": description,
-                "created_at": datetime.utcnow().isoformat() + "Z",
-                "updated_at": datetime.utcnow().isoformat() + "Z",
-                "positions": []
-            }
-
-            save_portfolios(data)
-
-            return json.dumps({
-                "success": True,
-                "portfolio_id": portfolio_id,
-                "name": name,
-                "message": f"Portfolio '{name}' created successfully"
-            }, indent=2)
-
-        except Exception as e:
-            return json.dumps({
-                "error": str(e)
-            }, indent=2)
+        if not user_id:
+            user_id = get_current_user_id()
+        
+        result = await PortfolioService.create_portfolio(
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+            name=name,
+            description=description
+        )
+        
+        return json.dumps(result, indent=2)
 
     @server.tool()
-    def manual_add_position(
+    async def manual_add_position(
         portfolio_id: str,
         name: str,
         units: float,
@@ -75,7 +58,8 @@ def register_manual_portfolio_tools(server):
         symbol: Optional[str] = None,
         manual_price: Optional[float] = None,
         asset_type: Optional[str] = None,
-        notes: Optional[str] = None
+        notes: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> str:
         """
         Add a position to a manual portfolio.
@@ -94,55 +78,31 @@ def register_manual_portfolio_tools(server):
             manual_price: Optional manual price if no ticker is available
             asset_type: Optional category (e.g., "private_equity", "real_estate", "crypto")
             notes: Optional notes about the position
+            user_id: Optional user ID (uses default user if not provided)
 
         Returns:
             JSON string confirming position was added
         """
-        try:
-            data = load_portfolios()
-
-            if portfolio_id not in data["portfolios"]:
-                return json.dumps({
-                    "error": f"Portfolio '{portfolio_id}' not found",
-                    "message": "Create the portfolio first using manual_create_portfolio"
-                }, indent=2)
-
-            position_id = generate_position_id()
-
-            position = {
-                "id": position_id,
-                "name": name,
-                "symbol": symbol,
-                "units": units,
-                "average_cost": average_cost,
-                "currency": currency.upper(),
-                "manual_price": manual_price,
-                "asset_type": asset_type,
-                "notes": notes,
-                "created_at": datetime.utcnow().isoformat() + "Z",
-                "updated_at": datetime.utcnow().isoformat() + "Z"
-            }
-
-            data["portfolios"][portfolio_id]["positions"].append(position)
-            data["portfolios"][portfolio_id]["updated_at"] = datetime.utcnow().isoformat() + "Z"
-
-            save_portfolios(data)
-
-            return json.dumps({
-                "success": True,
-                "portfolio_id": portfolio_id,
-                "position_id": position_id,
-                "position": position,
-                "message": f"Position '{name}' added to portfolio '{portfolio_id}'"
-            }, indent=2)
-
-        except Exception as e:
-            return json.dumps({
-                "error": str(e)
-            }, indent=2)
+        if not user_id:
+            user_id = get_current_user_id()
+        
+        result = await PortfolioService.add_position(
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+            name=name,
+            units=units,
+            average_cost=average_cost,
+            currency=currency,
+            symbol=symbol,
+            manual_price=manual_price,
+            asset_type=asset_type,
+            notes=notes
+        )
+        
+        return json.dumps(result, indent=2)
 
     @server.tool()
-    def manual_update_position(
+    async def manual_update_position(
         portfolio_id: str,
         position_id: str,
         units: Optional[float] = None,
@@ -150,7 +110,8 @@ def register_manual_portfolio_tools(server):
         manual_price: Optional[float] = None,
         symbol: Optional[str] = None,
         name: Optional[str] = None,
-        notes: Optional[str] = None
+        notes: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> str:
         """
         Update an existing position in a manual portfolio.
@@ -166,69 +127,33 @@ def register_manual_portfolio_tools(server):
             symbol: New Yahoo Finance symbol (optional, set to empty string to clear)
             name: New display name (optional)
             notes: New notes (optional)
+            user_id: Optional user ID (uses default user if not provided)
 
         Returns:
             JSON string confirming the update
         """
-        try:
-            data = load_portfolios()
-
-            if portfolio_id not in data["portfolios"]:
-                return json.dumps({
-                    "error": f"Portfolio '{portfolio_id}' not found"
-                }, indent=2)
-
-            portfolio = data["portfolios"][portfolio_id]
-            position = None
-            position_index = None
-
-            for i, pos in enumerate(portfolio["positions"]):
-                if pos["id"] == position_id:
-                    position = pos
-                    position_index = i
-                    break
-
-            if position is None:
-                return json.dumps({
-                    "error": f"Position '{position_id}' not found in portfolio '{portfolio_id}'"
-                }, indent=2)
-
-            # Update only provided fields
-            if units is not None:
-                position["units"] = units
-            if average_cost is not None:
-                position["average_cost"] = average_cost
-            if manual_price is not None:
-                position["manual_price"] = manual_price if manual_price != 0 else None
-            if symbol is not None:
-                position["symbol"] = symbol if symbol else None
-            if name is not None:
-                position["name"] = name
-            if notes is not None:
-                position["notes"] = notes
-
-            position["updated_at"] = datetime.utcnow().isoformat() + "Z"
-            portfolio["updated_at"] = datetime.utcnow().isoformat() + "Z"
-
-            save_portfolios(data)
-
-            return json.dumps({
-                "success": True,
-                "portfolio_id": portfolio_id,
-                "position_id": position_id,
-                "position": position,
-                "message": f"Position '{position['name']}' updated"
-            }, indent=2)
-
-        except Exception as e:
-            return json.dumps({
-                "error": str(e)
-            }, indent=2)
+        if not user_id:
+            user_id = get_current_user_id()
+        
+        result = await PortfolioService.update_position(
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+            position_id=position_id,
+            units=units,
+            average_cost=average_cost,
+            manual_price=manual_price,
+            symbol=symbol,
+            name=name,
+            notes=notes
+        )
+        
+        return json.dumps(result, indent=2)
 
     @server.tool()
-    def manual_remove_position(
+    async def manual_remove_position(
         portfolio_id: str,
-        position_id: str
+        position_id: str,
+        user_id: Optional[str] = None
     ) -> str:
         """
         Remove a position from a manual portfolio.
@@ -236,49 +161,26 @@ def register_manual_portfolio_tools(server):
         Args:
             portfolio_id: The portfolio containing the position
             position_id: The ID of the position to remove
+            user_id: Optional user ID (uses default user if not provided)
 
         Returns:
             JSON string confirming removal
         """
-        try:
-            data = load_portfolios()
-
-            if portfolio_id not in data["portfolios"]:
-                return json.dumps({
-                    "error": f"Portfolio '{portfolio_id}' not found"
-                }, indent=2)
-
-            portfolio = data["portfolios"][portfolio_id]
-            original_count = len(portfolio["positions"])
-
-            portfolio["positions"] = [
-                p for p in portfolio["positions"] if p["id"] != position_id
-            ]
-
-            if len(portfolio["positions"]) == original_count:
-                return json.dumps({
-                    "error": f"Position '{position_id}' not found in portfolio '{portfolio_id}'"
-                }, indent=2)
-
-            portfolio["updated_at"] = datetime.utcnow().isoformat() + "Z"
-
-            save_portfolios(data)
-
-            return json.dumps({
-                "success": True,
-                "portfolio_id": portfolio_id,
-                "position_id": position_id,
-                "message": f"Position removed from portfolio '{portfolio_id}'"
-            }, indent=2)
-
-        except Exception as e:
-            return json.dumps({
-                "error": str(e)
-            }, indent=2)
+        if not user_id:
+            user_id = get_current_user_id()
+        
+        result = await PortfolioService.remove_position(
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+            position_id=position_id
+        )
+        
+        return json.dumps(result, indent=2)
 
     @server.tool()
-    def manual_delete_portfolio(
-        portfolio_id: str
+    async def manual_delete_portfolio(
+        portfolio_id: str,
+        user_id: Optional[str] = None
     ) -> str:
         """
         Delete an entire manual portfolio and all its positions.
@@ -287,230 +189,65 @@ def register_manual_portfolio_tools(server):
 
         Args:
             portfolio_id: The portfolio to delete
+            user_id: Optional user ID (uses default user if not provided)
 
         Returns:
             JSON string confirming deletion
         """
-        try:
-            data = load_portfolios()
-
-            if portfolio_id not in data["portfolios"]:
-                return json.dumps({
-                    "error": f"Portfolio '{portfolio_id}' not found"
-                }, indent=2)
-
-            portfolio_name = data["portfolios"][portfolio_id]["name"]
-            positions_count = len(data["portfolios"][portfolio_id]["positions"])
-
-            del data["portfolios"][portfolio_id]
-            save_portfolios(data)
-
-            return json.dumps({
-                "success": True,
-                "portfolio_id": portfolio_id,
-                "name": portfolio_name,
-                "positions_deleted": positions_count,
-                "message": f"Portfolio '{portfolio_name}' and all its positions have been deleted"
-            }, indent=2)
-
-        except Exception as e:
-            return json.dumps({
-                "error": str(e)
-            }, indent=2)
+        if not user_id:
+            user_id = get_current_user_id()
+        
+        result = await PortfolioService.delete_portfolio(
+            user_id=user_id,
+            portfolio_id=portfolio_id
+        )
+        
+        return json.dumps(result, indent=2)
 
     @server.tool()
-    def manual_list_portfolios() -> str:
-        """
-        List all manual portfolios with summary information.
-
-        Returns a summary of each portfolio including name, position count, and last updated time.
-        Use manual_get_portfolio to get full details with live prices.
-
-        Returns:
-            JSON string containing portfolio summaries
-        """
-        try:
-            data = load_portfolios()
-
-            portfolios_summary = []
-            for portfolio_id, portfolio in data["portfolios"].items():
-                # Calculate total cost basis
-                total_cost_basis = sum(
-                    p["units"] * p["average_cost"]
-                    for p in portfolio["positions"]
-                )
-
-                portfolios_summary.append({
-                    "portfolio_id": portfolio_id,
-                    "name": portfolio["name"],
-                    "description": portfolio.get("description"),
-                    "positions_count": len(portfolio["positions"]),
-                    "total_cost_basis": round(total_cost_basis, 2),
-                    "created_at": portfolio.get("created_at"),
-                    "updated_at": portfolio.get("updated_at")
-                })
-
-            return json.dumps({
-                "success": True,
-                "portfolios_count": len(portfolios_summary),
-                "portfolios": portfolios_summary
-            }, indent=2)
-
-        except Exception as e:
-            return json.dumps({
-                "error": str(e)
-            }, indent=2)
-
-    @server.tool()
-    def manual_get_portfolio(
-        portfolio_id: str,
-        target_currency: Optional[str] = None
+    async def manual_list_portfolios(
+        user_id: Optional[str] = None
     ) -> str:
         """
-        Get a manual portfolio with live prices from Yahoo Finance.
+        List all manual portfolios with summaries.
 
-        Fetches current prices for positions that have a Yahoo Finance symbol,
-        and uses manual_price for positions without a symbol. Calculates market
-        values, unrealized P&L, and optionally converts to a target currency.
+        Args:
+            user_id: Optional user ID (uses default user if not provided)
 
-        For private companies like SpaceX, you can use secondary market tickers:
-        - STRB (Starbase) - provides exposure to SpaceX
-        - Or set manual_price for positions without a ticker
+        Returns:
+            JSON string with list of portfolios and their summaries
+        """
+        if not user_id:
+            user_id = get_current_user_id()
+        
+        result = await PortfolioService.list_portfolios(user_id=user_id)
+        
+        return json.dumps(result, indent=2)
+
+    @server.tool()
+    async def manual_get_portfolio(
+        portfolio_id: str,
+        target_currency: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> str:
+        """
+        Get detailed view of a manual portfolio with live prices.
 
         Args:
             portfolio_id: The portfolio to retrieve
-            target_currency: Optional currency to convert all values to (e.g., "GBP", "EUR")
+            target_currency: Optional currency for conversion (e.g., "GBP")
+            user_id: Optional user ID (uses default user if not provided)
 
         Returns:
-            JSON string containing portfolio with live prices and calculated P&L
+            JSON string with portfolio details and current valuations
         """
-        try:
-            data = load_portfolios()
-
-            if portfolio_id not in data["portfolios"]:
-                return json.dumps({
-                    "error": f"Portfolio '{portfolio_id}' not found"
-                }, indent=2)
-
-            portfolio = data["portfolios"][portfolio_id]
-
-            # FX rate cache
-            fx_cache = {}
-            fx_rates_used = {}
-
-            positions_with_prices = []
-            total_market_value = 0.0
-            total_cost_basis = 0.0
-            total_market_value_converted = 0.0
-
-            for pos in portfolio["positions"]:
-                symbol = pos.get("symbol")
-                units = pos.get("units", 0)
-                average_cost = pos.get("average_cost", 0)
-                pos_currency = pos.get("currency", "USD")
-                manual_price = pos.get("manual_price")
-
-                # Get price: try Yahoo Finance first, then manual_price
-                live_price = None
-                price_source = "none"
-
-                if symbol:
-                    live_data = get_live_price(symbol)
-                    if live_data.get("price") is not None:
-                        live_price = live_data["price"]
-                        price_source = "yahoo_finance"
-
-                if live_price is None and manual_price is not None:
-                    live_price = manual_price
-                    price_source = "manual"
-
-                # Calculate values
-                cost_basis = units * average_cost if units and average_cost else 0
-                market_value = units * live_price if units and live_price else None
-
-                unrealized_pnl = None
-                unrealized_pnl_pct = None
-                if market_value is not None and cost_basis > 0:
-                    unrealized_pnl = market_value - cost_basis
-                    unrealized_pnl_pct = round((unrealized_pnl / cost_basis) * 100, 2)
-
-                pos_data = {
-                    "id": pos.get("id"),
-                    "name": pos.get("name"),
-                    "symbol": symbol,
-                    "units": units,
-                    "currency": pos_currency,
-                    "live_price": round(live_price, 2) if live_price else None,
-                    "price_source": price_source,
-                    "market_value": round(market_value, 2) if market_value else None,
-                    "average_cost": average_cost,
-                    "cost_basis": round(cost_basis, 2) if cost_basis else None,
-                    "unrealized_pnl": round(unrealized_pnl, 2) if unrealized_pnl else None,
-                    "unrealized_pnl_pct": unrealized_pnl_pct,
-                    "asset_type": pos.get("asset_type"),
-                    "notes": pos.get("notes")
-                }
-
-                # Track totals
-                if market_value:
-                    total_market_value += market_value
-                total_cost_basis += cost_basis
-
-                # Currency conversion if target_currency specified
-                if target_currency and pos_currency != target_currency:
-                    fx_rate = get_fx_rate_cached(pos_currency, target_currency, fx_cache)
-                    if fx_rate:
-                        fx_key = f"{pos_currency}_{target_currency}"
-                        fx_rates_used[fx_key] = fx_rate
-
-                        pos_data["converted"] = {
-                            "currency": target_currency,
-                            "fx_rate": fx_rate,
-                            "live_price": round(live_price * fx_rate, 2) if live_price else None,
-                            "market_value": round(market_value * fx_rate, 2) if market_value else None,
-                            "cost_basis": round(cost_basis * fx_rate, 2) if cost_basis else None,
-                            "unrealized_pnl": round(unrealized_pnl * fx_rate, 2) if unrealized_pnl else None,
-                            "unrealized_pnl_pct": unrealized_pnl_pct
-                        }
-                        if market_value:
-                            total_market_value_converted += market_value * fx_rate
-                elif target_currency and pos_currency == target_currency:
-                    if market_value:
-                        total_market_value_converted += market_value
-
-                positions_with_prices.append(pos_data)
-
-            # Calculate total P&L
-            total_unrealized_pnl = total_market_value - total_cost_basis if total_market_value else None
-            total_unrealized_pnl_pct = None
-            if total_unrealized_pnl is not None and total_cost_basis > 0:
-                total_unrealized_pnl_pct = round((total_unrealized_pnl / total_cost_basis) * 100, 2)
-
-            result = {
-                "success": True,
-                "portfolio_id": portfolio_id,
-                "name": portfolio["name"],
-                "description": portfolio.get("description"),
-                "positions_count": len(positions_with_prices),
-                "positions": positions_with_prices,
-                "total_market_value": round(total_market_value, 2) if total_market_value else None,
-                "total_cost_basis": round(total_cost_basis, 2),
-                "total_unrealized_pnl": round(total_unrealized_pnl, 2) if total_unrealized_pnl else None,
-                "total_unrealized_pnl_pct": total_unrealized_pnl_pct,
-                "updated_at": portfolio.get("updated_at")
-            }
-
-            if target_currency:
-                result["target_currency"] = target_currency
-                result["fx_rates_used"] = fx_rates_used
-                result["total_market_value_converted"] = {
-                    target_currency: round(total_market_value_converted, 2)
-                } if total_market_value_converted else None
-                result["fx_note"] = "Cost basis converted using current FX rate, not historical rate from purchase date"
-
-            return json.dumps(result, indent=2)
-
-        except Exception as e:
-            return json.dumps({
-                "error": str(e)
-            }, indent=2)
+        if not user_id:
+            user_id = get_current_user_id()
+        
+        result = await PortfolioService.get_portfolio(
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+            target_currency=target_currency
+        )
+        
+        return json.dumps(result, indent=2)

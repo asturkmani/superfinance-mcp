@@ -1,9 +1,9 @@
-"""Portfolio service - manual portfolio management."""
+"""Portfolio service - manual portfolio management with SQLite backend."""
 
 from datetime import datetime
 from typing import Optional
 
-from helpers.portfolio import load_portfolios, save_portfolios, generate_position_id
+from db import queries
 from helpers.pricing import get_live_price, get_fx_rate_cached
 
 
@@ -12,15 +12,17 @@ class PortfolioService:
 
     @staticmethod
     async def create_portfolio(
+        user_id: str,
         portfolio_id: str,
         name: str,
         description: Optional[str] = None
     ) -> dict:
         """
-        Create a new manual portfolio.
+        Create a new manual portfolio (account).
 
         Args:
-            portfolio_id: Unique identifier
+            user_id: User ID
+            portfolio_id: Unique identifier for the portfolio
             name: Display name
             description: Optional description
 
@@ -28,23 +30,30 @@ class PortfolioService:
             dict confirming creation
         """
         try:
-            data = load_portfolios()
-
-            if portfolio_id in data["portfolios"]:
+            # Check if account with this ID already exists
+            existing = queries.get_account(portfolio_id)
+            if existing:
                 return {
                     "error": f"Portfolio '{portfolio_id}' already exists",
                     "message": "Use a different ID or delete the existing one"
                 }
 
-            data["portfolios"][portfolio_id] = {
-                "name": name,
-                "description": description,
-                "created_at": datetime.utcnow().isoformat() + "Z",
-                "updated_at": datetime.utcnow().isoformat() + "Z",
-                "positions": []
-            }
+            # Create account
+            account_id = queries.create_account(
+                user_id=user_id,
+                name=name,
+                account_type=description if description else None,
+                currency="USD",
+                is_manual=True
+            )
 
-            save_portfolios(data)
+            # Override the generated ID with the provided portfolio_id
+            # This maintains backward compatibility with the old JSON-based system
+            from db.database import get_db
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE accounts SET id = ? WHERE id = ?", (portfolio_id, account_id))
+            conn.commit()
 
             return {
                 "success": True,
@@ -57,6 +66,7 @@ class PortfolioService:
 
     @staticmethod
     async def add_position(
+        user_id: str,
         portfolio_id: str,
         name: str,
         units: float,
@@ -71,6 +81,7 @@ class PortfolioService:
         Add a position to a portfolio.
 
         Args:
+            user_id: User ID (for validation)
             portfolio_id: Target portfolio
             name: Position display name
             units: Number of units
@@ -85,46 +96,70 @@ class PortfolioService:
             dict with position details
         """
         try:
-            data = load_portfolios()
-
-            if portfolio_id not in data["portfolios"]:
+            # Verify account exists and belongs to user
+            account = queries.get_account(portfolio_id)
+            if not account:
                 return {
                     "error": f"Portfolio '{portfolio_id}' not found",
                     "message": "Create the portfolio first"
                 }
 
-            position_id = generate_position_id()
+            if account['user_id'] != user_id:
+                return {
+                    "error": "Access denied",
+                    "message": "This portfolio belongs to another user"
+                }
 
-            position = {
-                "id": position_id,
-                "name": name,
-                "symbol": symbol,
-                "units": units,
-                "average_cost": average_cost,
-                "currency": currency.upper(),
-                "manual_price": manual_price,
-                "asset_type": asset_type,
-                "notes": notes,
-                "created_at": datetime.utcnow().isoformat() + "Z",
-                "updated_at": datetime.utcnow().isoformat() + "Z"
-            }
+            # Calculate market value
+            market_value = None
+            if manual_price is not None:
+                market_value = units * manual_price
 
-            data["portfolios"][portfolio_id]["positions"].append(position)
-            data["portfolios"][portfolio_id]["updated_at"] = datetime.utcnow().isoformat() + "Z"
+            # Create holding
+            holding_id = queries.upsert_holding(
+                account_id=portfolio_id,
+                symbol=symbol or name,  # Use name as symbol if no symbol provided
+                name=name,
+                quantity=units,
+                average_cost=average_cost,
+                current_price=manual_price,
+                market_value=market_value,
+                currency=currency.upper(),
+                asset_type=asset_type,
+                metadata={"notes": notes} if notes else None
+            )
 
-            save_portfolios(data)
+            # Get the created holding
+            from db.database import get_db
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM holdings WHERE id = ?", (holding_id,))
+            holding = dict(cursor.fetchone())
 
             return {
                 "success": True,
                 "portfolio_id": portfolio_id,
-                "position_id": position_id,
-                "position": position
+                "position_id": holding_id,
+                "position": {
+                    "id": holding['id'],
+                    "name": holding['name'],
+                    "symbol": holding['symbol'],
+                    "units": holding['quantity'],
+                    "average_cost": holding['average_cost'],
+                    "currency": holding['currency'],
+                    "manual_price": holding['current_price'],
+                    "asset_type": holding['asset_type'],
+                    "notes": notes,
+                    "created_at": holding['created_at'],
+                    "updated_at": holding['updated_at']
+                }
             }
         except Exception as e:
             return {"error": str(e)}
 
     @staticmethod
     async def update_position(
+        user_id: str,
         portfolio_id: str,
         position_id: str,
         units: Optional[float] = None,
@@ -138,6 +173,7 @@ class PortfolioService:
         Update a position in a portfolio.
 
         Args:
+            user_id: User ID (for validation)
             portfolio_id: Target portfolio
             position_id: Position to update
             units: New units (optional)
@@ -151,55 +187,92 @@ class PortfolioService:
             dict with updated position
         """
         try:
-            data = load_portfolios()
-
-            if portfolio_id not in data["portfolios"]:
+            # Verify account exists and belongs to user
+            account = queries.get_account(portfolio_id)
+            if not account:
                 return {"error": f"Portfolio '{portfolio_id}' not found"}
 
-            portfolio = data["portfolios"][portfolio_id]
-            position = None
+            if account['user_id'] != user_id:
+                return {"error": "Access denied"}
 
-            for i, pos in enumerate(portfolio["positions"]):
-                if pos["id"] == position_id:
-                    position = pos
-                    break
+            # Get current holding
+            from db.database import get_db
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM holdings WHERE id = ? AND account_id = ?", 
+                         (position_id, portfolio_id))
+            holding = cursor.fetchone()
 
-            if position is None:
+            if not holding:
                 return {"error": f"Position '{position_id}' not found"}
 
-            if units is not None:
-                position["units"] = units
-            if average_cost is not None:
-                position["average_cost"] = average_cost
-            if manual_price is not None:
-                position["manual_price"] = manual_price if manual_price != 0 else None
-            if symbol is not None:
-                position["symbol"] = symbol if symbol else None
+            holding = dict(holding)
+
+            # Build update parameters
+            updates = {}
             if name is not None:
-                position["name"] = name
-            if notes is not None:
-                position["notes"] = notes
+                updates['name'] = name
+            if units is not None:
+                updates['quantity'] = units
+            if average_cost is not None:
+                updates['average_cost'] = average_cost
+            if manual_price is not None:
+                updates['current_price'] = manual_price if manual_price != 0 else None
+            if symbol is not None:
+                # Can't update symbol directly since it's part of upsert key
+                # Instead update via SQL
+                cursor.execute("UPDATE holdings SET symbol = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", 
+                             (symbol, position_id))
 
-            position["updated_at"] = datetime.utcnow().isoformat() + "Z"
-            portfolio["updated_at"] = datetime.utcnow().isoformat() + "Z"
+            # Calculate new market value if needed
+            quantity = updates.get('quantity', holding['quantity'])
+            price = updates.get('current_price', holding['current_price'])
+            if quantity and price:
+                updates['market_value'] = quantity * price
 
-            save_portfolios(data)
+            # Update holding
+            if updates:
+                # Build SQL update
+                set_clauses = [f"{k} = ?" for k in updates.keys()]
+                set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+                values = list(updates.values()) + [position_id]
+
+                cursor.execute(
+                    f"UPDATE holdings SET {', '.join(set_clauses)} WHERE id = ?",
+                    values
+                )
+                conn.commit()
+
+            # Get updated holding
+            cursor.execute("SELECT * FROM holdings WHERE id = ?", (position_id,))
+            updated = dict(cursor.fetchone())
 
             return {
                 "success": True,
                 "portfolio_id": portfolio_id,
                 "position_id": position_id,
-                "position": position
+                "position": {
+                    "id": updated['id'],
+                    "name": updated['name'],
+                    "symbol": updated['symbol'],
+                    "units": updated['quantity'],
+                    "average_cost": updated['average_cost'],
+                    "currency": updated['currency'],
+                    "manual_price": updated['current_price'],
+                    "asset_type": updated['asset_type'],
+                    "updated_at": updated['updated_at']
+                }
             }
         except Exception as e:
             return {"error": str(e)}
 
     @staticmethod
-    async def remove_position(portfolio_id: str, position_id: str) -> dict:
+    async def remove_position(user_id: str, portfolio_id: str, position_id: str) -> dict:
         """
         Remove a position from a portfolio.
 
         Args:
+            user_id: User ID (for validation)
             portfolio_id: Target portfolio
             position_id: Position to remove
 
@@ -207,23 +280,19 @@ class PortfolioService:
             dict confirming removal
         """
         try:
-            data = load_portfolios()
-
-            if portfolio_id not in data["portfolios"]:
+            # Verify account exists and belongs to user
+            account = queries.get_account(portfolio_id)
+            if not account:
                 return {"error": f"Portfolio '{portfolio_id}' not found"}
 
-            portfolio = data["portfolios"][portfolio_id]
-            original_count = len(portfolio["positions"])
+            if account['user_id'] != user_id:
+                return {"error": "Access denied"}
 
-            portfolio["positions"] = [
-                p for p in portfolio["positions"] if p["id"] != position_id
-            ]
+            # Delete holding
+            deleted = queries.delete_holding(position_id)
 
-            if len(portfolio["positions"]) == original_count:
+            if not deleted:
                 return {"error": f"Position '{position_id}' not found"}
-
-            portfolio["updated_at"] = datetime.utcnow().isoformat() + "Z"
-            save_portfolios(data)
 
             return {
                 "success": True,
@@ -235,27 +304,34 @@ class PortfolioService:
             return {"error": str(e)}
 
     @staticmethod
-    async def delete_portfolio(portfolio_id: str) -> dict:
+    async def delete_portfolio(user_id: str, portfolio_id: str) -> dict:
         """
         Delete a portfolio and all positions.
 
         Args:
+            user_id: User ID (for validation)
             portfolio_id: Portfolio to delete
 
         Returns:
             dict confirming deletion
         """
         try:
-            data = load_portfolios()
-
-            if portfolio_id not in data["portfolios"]:
+            # Verify account exists and belongs to user
+            account = queries.get_account(portfolio_id)
+            if not account:
                 return {"error": f"Portfolio '{portfolio_id}' not found"}
 
-            portfolio_name = data["portfolios"][portfolio_id]["name"]
-            positions_count = len(data["portfolios"][portfolio_id]["positions"])
+            if account['user_id'] != user_id:
+                return {"error": "Access denied"}
 
-            del data["portfolios"][portfolio_id]
-            save_portfolios(data)
+            portfolio_name = account['name']
+
+            # Get holdings count before deletion
+            holdings = queries.get_holdings_for_account(portfolio_id)
+            positions_count = len(holdings)
+
+            # Delete account (cascades to holdings and transactions)
+            queries.delete_account(portfolio_id)
 
             return {
                 "success": True,
@@ -267,31 +343,40 @@ class PortfolioService:
             return {"error": str(e)}
 
     @staticmethod
-    async def list_portfolios() -> dict:
+    async def list_portfolios(user_id: str) -> dict:
         """
-        List all portfolios with summaries.
+        List all portfolios for a user with summaries.
+
+        Args:
+            user_id: User ID
 
         Returns:
             dict with portfolio summaries
         """
         try:
-            data = load_portfolios()
+            accounts = queries.get_accounts_for_user(user_id)
 
             summaries = []
-            for pid, portfolio in data["portfolios"].items():
+            for account in accounts:
+                # Only include manual accounts
+                if not account['is_manual']:
+                    continue
+
+                holdings = queries.get_holdings_for_account(account['id'])
+
                 total_cost = sum(
-                    p["units"] * p["average_cost"]
-                    for p in portfolio["positions"]
+                    (h['quantity'] or 0) * (h['average_cost'] or 0)
+                    for h in holdings
                 )
 
                 summaries.append({
-                    "portfolio_id": pid,
-                    "name": portfolio["name"],
-                    "description": portfolio.get("description"),
-                    "positions_count": len(portfolio["positions"]),
+                    "portfolio_id": account['id'],
+                    "name": account['name'],
+                    "description": account['account_type'],
+                    "positions_count": len(holdings),
                     "total_cost_basis": round(total_cost, 2),
-                    "created_at": portfolio.get("created_at"),
-                    "updated_at": portfolio.get("updated_at")
+                    "created_at": account['created_at'],
+                    "updated_at": account['updated_at']
                 })
 
             return {
@@ -304,6 +389,7 @@ class PortfolioService:
 
     @staticmethod
     async def get_portfolio(
+        user_id: str,
         portfolio_id: str,
         target_currency: Optional[str] = None
     ) -> dict:
@@ -311,6 +397,7 @@ class PortfolioService:
         Get a portfolio with live prices.
 
         Args:
+            user_id: User ID (for validation)
             portfolio_id: Portfolio to retrieve
             target_currency: Optional currency for conversion
 
@@ -318,12 +405,15 @@ class PortfolioService:
             dict with portfolio and live prices
         """
         try:
-            data = load_portfolios()
-
-            if portfolio_id not in data["portfolios"]:
+            # Verify account exists and belongs to user
+            account = queries.get_account(portfolio_id)
+            if not account:
                 return {"error": f"Portfolio '{portfolio_id}' not found"}
 
-            portfolio = data["portfolios"][portfolio_id]
+            if account['user_id'] != user_id:
+                return {"error": "Access denied"}
+
+            holdings = queries.get_holdings_for_account(portfolio_id)
 
             fx_cache = {}
             fx_rates_used = {}
@@ -333,22 +423,24 @@ class PortfolioService:
             total_cost_basis = 0.0
             total_converted = 0.0
 
-            for pos in portfolio["positions"]:
-                symbol = pos.get("symbol")
-                units = pos.get("units", 0)
-                avg_cost = pos.get("average_cost", 0)
-                pos_currency = pos.get("currency", "USD")
-                manual_price = pos.get("manual_price")
+            for holding in holdings:
+                symbol = holding.get('symbol')
+                units = holding.get('quantity', 0)
+                avg_cost = holding.get('average_cost', 0)
+                pos_currency = holding.get('currency', 'USD')
+                manual_price = holding.get('current_price')
 
                 live_price = None
                 price_source = "none"
 
+                # Try to get live price
                 if symbol:
                     live_data = get_live_price(symbol)
                     if live_data.get("price") is not None:
                         live_price = live_data["price"]
                         price_source = "yahoo_finance"
 
+                # Fall back to manual price
                 if live_price is None and manual_price is not None:
                     live_price = manual_price
                     price_source = "manual"
@@ -358,13 +450,14 @@ class PortfolioService:
 
                 pnl = None
                 pnl_pct = None
-                if market_value is not None and cost_basis > 0:
+                if market_value is not None and cost_basis != 0:
                     pnl = market_value - cost_basis
-                    pnl_pct = round((pnl / cost_basis) * 100, 2)
+                    if cost_basis > 0:
+                        pnl_pct = round((pnl / cost_basis) * 100, 2)
 
                 pos_data = {
-                    "id": pos.get("id"),
-                    "name": pos.get("name"),
+                    "id": holding.get('id'),
+                    "name": holding.get('name'),
                     "symbol": symbol,
                     "units": units,
                     "currency": pos_currency,
@@ -375,14 +468,16 @@ class PortfolioService:
                     "cost_basis": round(cost_basis, 2) if cost_basis else None,
                     "unrealized_pnl": round(pnl, 2) if pnl else None,
                     "unrealized_pnl_pct": pnl_pct,
-                    "asset_type": pos.get("asset_type"),
-                    "notes": pos.get("notes")
+                    "asset_type": holding.get('asset_type'),
+                    "notes": None  # TODO: extract from metadata
                 }
 
-                if market_value:
+                if market_value is not None:
                     total_market_value += market_value
-                total_cost_basis += cost_basis
+                if cost_basis is not None:
+                    total_cost_basis += cost_basis
 
+                # Handle currency conversion
                 if target_currency and pos_currency != target_currency:
                     fx_rate = get_fx_rate_cached(pos_currency, target_currency, fx_cache)
                     if fx_rate:
@@ -398,10 +493,10 @@ class PortfolioService:
                             "unrealized_pnl": round(pnl * fx_rate, 2) if pnl else None,
                             "unrealized_pnl_pct": pnl_pct
                         }
-                        if market_value:
+                        if market_value is not None:
                             total_converted += market_value * fx_rate
                 elif target_currency and pos_currency == target_currency:
-                    if market_value:
+                    if market_value is not None:
                         total_converted += market_value
 
                 positions.append(pos_data)
@@ -414,15 +509,15 @@ class PortfolioService:
             result = {
                 "success": True,
                 "portfolio_id": portfolio_id,
-                "name": portfolio["name"],
-                "description": portfolio.get("description"),
+                "name": account['name'],
+                "description": account.get('account_type'),
                 "positions_count": len(positions),
                 "positions": positions,
                 "total_market_value": round(total_market_value, 2) if total_market_value else None,
                 "total_cost_basis": round(total_cost_basis, 2),
                 "total_unrealized_pnl": round(total_pnl, 2) if total_pnl else None,
                 "total_unrealized_pnl_pct": total_pnl_pct,
-                "updated_at": portfolio.get("updated_at")
+                "updated_at": account.get('updated_at')
             }
 
             if target_currency:

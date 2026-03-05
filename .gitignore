@@ -12,3 +12,11 @@ wheels/
 # Environment variables
 .env
 .env.local
+
+# Local data
+data/*.db
+data/*.json
+
+# Completion reports
+*_COMPLETION.md
+CHANGES_SUMMARY.md

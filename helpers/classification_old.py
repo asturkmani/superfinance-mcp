@@ -1,11 +1,11 @@
 """
-SQLite-based classification system for holdings.
+Redis-based classification system for holdings.
 
 Simple model:
-1. First lookup → Perplexity classifies → stored in SQLite
-2. User override → updates SQLite entry
+1. First lookup → Perplexity classifies → stored permanently in Redis
+2. User override → updates same entry in Redis
 
-All classifications are permanent.
+All classifications are permanent (no TTL).
 Uses locking to prevent duplicate Perplexity calls for the same symbol.
 """
 
@@ -15,8 +15,12 @@ import threading
 import time
 from typing import Optional
 
-from db import queries
+import cache
 
+
+# Redis key patterns
+KEY_CATEGORIES = "superfinance:categories"
+KEY_CLASSIFICATION = "superfinance:classification"  # :{symbol}
 
 # Lock to prevent concurrent Perplexity calls for the same symbol
 _classification_lock = threading.Lock()
@@ -42,37 +46,61 @@ DEFAULT_CATEGORIES = [
 ]
 
 
-def get_known_categories() -> list[str]:
-    """Get list of all known categories from classifications."""
+def _ensure_categories() -> list[str]:
+    """Ensure categories exist in Redis, seed defaults if empty."""
+    client = cache._get_redis_client()
+    if not client:
+        return DEFAULT_CATEGORIES
+
     try:
-        classifications = queries.get_all_classifications()
-        categories = set(c.get('category') for c in classifications if c.get('category'))
-        
-        # Merge with defaults
-        all_categories = set(DEFAULT_CATEGORIES) | categories
-        
-        return sorted(list(all_categories))
+        categories = client.smembers(KEY_CATEGORIES)
+        if not categories:
+            for cat in DEFAULT_CATEGORIES:
+                client.sadd(KEY_CATEGORIES, cat)
+            return DEFAULT_CATEGORIES
+        return sorted(list(categories))
     except Exception as e:
         print(f"Error loading categories: {e}")
         return DEFAULT_CATEGORIES
 
 
+def get_known_categories() -> list[str]:
+    """Get list of all known categories."""
+    return _ensure_categories()
+
+
 def add_category(category: str) -> bool:
-    """
-    Add a new category.
-    
-    Note: Categories are now implicitly created when used in classifications.
-    This function is kept for compatibility but doesn't do anything special.
-    """
-    # Categories are tracked via classifications, so this is a no-op
-    return True
+    """Add a new category."""
+    client = cache._get_redis_client()
+    if not client:
+        return False
+
+    try:
+        client.sadd(KEY_CATEGORIES, category)
+        return True
+    except Exception as e:
+        print(f"Error adding category: {e}")
+        return False
 
 
 def get_known_names() -> list[str]:
-    """Get list of all known consolidated names from SQLite."""
+    """Get list of all known consolidated names from Redis."""
+    client = cache._get_redis_client()
+    if not client:
+        return []
+
     try:
-        classifications = queries.get_all_classifications()
-        names = set(c.get('display_name') for c in classifications if c.get('display_name'))
+        names = set()
+        keys = client.keys(f"{KEY_CLASSIFICATION}:*")
+        for key in (keys or []):
+            data = client.get(key)
+            if data:
+                try:
+                    parsed = json.loads(data) if isinstance(data, str) else data
+                    if parsed.get("name"):
+                        names.add(parsed["name"])
+                except:
+                    pass
         return sorted(list(names))
     except Exception as e:
         print(f"Error getting names: {e}")
@@ -90,19 +118,20 @@ def extract_underlying_symbol(symbol: str) -> str:
 
 
 def get_stored_classification(symbol: str) -> Optional[dict]:
-    """Get classification from SQLite."""
+    """Get classification from Redis."""
     symbol = symbol.upper().strip()
     underlying = extract_underlying_symbol(symbol)
-    
+    key = f"{KEY_CLASSIFICATION}:{underlying}"
+
+    # Use client directly since we store with full key (not via cache helper)
+    client = cache._get_redis_client()
+    if not client:
+        return None
+
     try:
-        classification = queries.get_classification(underlying)
-        if classification:
-            # Convert to old format for compatibility
-            return {
-                "name": classification['display_name'],
-                "category": classification['category'],
-                "source": classification['source']
-            }
+        data = client.get(key)
+        if data:
+            return json.loads(data) if isinstance(data, str) else data
         return None
     except Exception as e:
         print(f"Error getting classification for {symbol}: {e}")
@@ -110,17 +139,23 @@ def get_stored_classification(symbol: str) -> Optional[dict]:
 
 
 def store_classification(symbol: str, name: str, category: str, source: str = "perplexity") -> bool:
-    """Store classification in SQLite (permanent)."""
+    """Store classification in Redis (permanent, no TTL)."""
     symbol = symbol.upper().strip()
     underlying = extract_underlying_symbol(symbol)
-    
+    key = f"{KEY_CLASSIFICATION}:{underlying}"
+
+    client = cache._get_redis_client()
+    if not client:
+        return False
+
     try:
-        queries.upsert_classification(
-            symbol=underlying,
-            display_name=name,
-            category=category,
-            source=source
-        )
+        data = json.dumps({
+            "name": name,
+            "category": category,
+            "source": source
+        })
+        client.set(key, data)  # No TTL - permanent
+        add_category(category)
         return True
     except Exception as e:
         print(f"Error storing classification: {e}")
@@ -128,12 +163,18 @@ def store_classification(symbol: str, name: str, category: str, source: str = "p
 
 
 def delete_classification(symbol: str) -> bool:
-    """Delete classification from SQLite."""
+    """Delete classification from Redis."""
     symbol = symbol.upper().strip()
     underlying = extract_underlying_symbol(symbol)
-    
+    key = f"{KEY_CLASSIFICATION}:{underlying}"
+
+    client = cache._get_redis_client()
+    if not client:
+        return False
+
     try:
-        return queries.delete_classification(underlying)
+        client.delete(key)
+        return True
     except Exception as e:
         print(f"Error deleting classification for {symbol}: {e}")
         return False
@@ -235,7 +276,7 @@ def get_classification(symbol: str, description: str = None) -> dict:
     """
     Get classification for a holding.
 
-    1. Check SQLite (permanent storage)
+    1. Check Redis (permanent storage)
     2. If in-flight by another thread, wait for it
     3. If not found, call Perplexity and store permanently
     4. Fallback if Perplexity fails
@@ -248,7 +289,7 @@ def get_classification(symbol: str, description: str = None) -> dict:
     symbol = symbol.upper().strip()
     underlying = extract_underlying_symbol(symbol)
 
-    # 1. Quick check SQLite (no lock needed for read)
+    # 1. Quick check Redis (no lock needed for read)
     stored = get_stored_classification(underlying)
     if stored:
         return stored
@@ -308,7 +349,7 @@ def get_classification(symbol: str, description: str = None) -> dict:
 
 def update_classification(symbol: str, name: Optional[str] = None, category: Optional[str] = None) -> dict:
     """
-    Update classification for a symbol. Just overwrites the entry in SQLite.
+    Update classification for a symbol. Just overwrites the entry in Redis.
     """
     symbol = symbol.upper().strip()
     underlying = extract_underlying_symbol(symbol)
@@ -326,22 +367,29 @@ def update_classification(symbol: str, name: Optional[str] = None, category: Opt
 
 
 def get_all_classifications() -> dict:
-    """Get all classifications from SQLite."""
+    """Get all classifications from Redis."""
+    client = cache._get_redis_client()
+    if not client:
+        return {"categories": DEFAULT_CATEGORIES, "tickers": {}}
+
+    tickers = {}
     try:
-        classifications = queries.get_all_classifications()
-        
-        tickers = {}
-        for c in classifications:
-            tickers[c['symbol']] = {
-                "name": c['display_name'],
-                "category": c['category'],
-                "source": c['source']
-            }
-        
-        return {
-            "categories": get_known_categories(),
-            "tickers": tickers
-        }
+        keys = client.keys(f"{KEY_CLASSIFICATION}:*")
+        for key in (keys or []):
+            symbol = key.split(":")[-1]
+            data = client.get(key)
+            if data:
+                try:
+                    parsed = json.loads(data) if isinstance(data, str) else data
+                    tickers[symbol] = {
+                        "name": parsed.get("name", symbol),
+                        "category": parsed.get("category", "Other"),
+                        "source": parsed.get("source", "unknown")
+                    }
+                except:
+                    pass
+
+        return {"categories": get_known_categories(), "tickers": tickers}
     except Exception as e:
         print(f"Error getting classifications: {e}")
         return {"categories": DEFAULT_CATEGORIES, "tickers": {}}

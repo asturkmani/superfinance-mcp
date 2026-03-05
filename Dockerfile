@@ -21,10 +21,12 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY server.py ./
 COPY cache.py ./
 COPY refresh.py ./
+COPY auth.py ./
 COPY helpers/ ./helpers/
 COPY tools/ ./tools/
 COPY services/ ./services/
 COPY api/ ./api/
+COPY db/ ./db/
 COPY data/ ./data/
 COPY README.md ./
 COPY pyproject.toml ./

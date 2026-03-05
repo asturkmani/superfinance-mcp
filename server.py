@@ -111,6 +111,10 @@ if __name__ == "__main__":
 
     # Check if we're running in Fly.io or remote environment
     if os.getenv("FLY_APP_NAME") or os.getenv("PORT"):
+        # Set up auth for HTTP mode
+        from auth import VaultTokenVerifier
+        yfinance_server.auth = VaultTokenVerifier()
+        
         # Remote deployment - use HTTP
         port = int(os.getenv("PORT", "8080"))
         print(f"Starting SuperFinance server on HTTP at 0.0.0.0:{port}")
@@ -152,11 +156,57 @@ if __name__ == "__main__":
                 status_code=404
             )
 
+        async def serve_dashboard(request):
+            """GET /d/{dashboard_id} - Serve dashboard page."""
+            from db import queries
+            from helpers.dashboard_templates import generate_dashboard_html
+            from helpers.widget_data import fetch_all_widget_data
+            
+            dashboard_id = request.path_params["dashboard_id"]
+            dashboard = queries.get_dashboard(dashboard_id)
+            if not dashboard:
+                return JSONResponse({"error": "Dashboard not found"}, status_code=404)
+            
+            widgets = queries.list_widgets(dashboard_id)
+            user_id = dashboard["user_id"]
+            
+            # Fetch real data for all widgets
+            widget_data = await fetch_all_widget_data(widgets, user_id)
+            
+            html = generate_dashboard_html(dashboard, widgets, widget_data)
+            return HTMLResponse(html)
+
+        async def signup(request):
+            """POST /signup - Create account and get MCP token."""
+            from db import queries
+            body = await request.json()
+            email = body.get("email")
+            name = body.get("name")
+            password = body.get("password")
+            
+            if not email:
+                return JSONResponse({"error": "email required"}, status_code=400)
+            
+            try:
+                user_id, token = queries.signup_user(email, name, password)
+                return JSONResponse({
+                    "user_id": user_id,
+                    "token": token,
+                    "mcp_url": f"https://joinvault.xyz/mcp",
+                    "instructions": "Add this MCP server to your AI client with the token as Bearer auth"
+                })
+            except ValueError as e:
+                return JSONResponse({"error": str(e)}, status_code=409)
+
         # Add health check route
         app.routes.insert(0, Route("/", health_check))
         app.routes.insert(1, Route("/health", health_check))
+        # Add signup route
+        app.routes.insert(2, Route("/signup", signup, methods=["POST"]))
         # Add chart serving route
-        app.routes.insert(2, Route("/charts/{chart_id}", serve_chart))
+        app.routes.insert(3, Route("/charts/{chart_id}", serve_chart))
+        # Add dashboard serving route
+        app.routes.insert(4, Route("/d/{dashboard_id}", serve_dashboard))
 
         # Mount the FastAPI REST API
         from api import create_api_app

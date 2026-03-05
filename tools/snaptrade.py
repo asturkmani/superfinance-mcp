@@ -7,6 +7,9 @@ from typing import Optional
 from snaptrade_client import SnapTrade
 
 from helpers.pricing import get_live_price
+from services.snaptrade_service import SnapTradeService
+from db import queries
+from helpers.user_context import get_current_user_id
 
 
 # Initialize SnapTrade client
@@ -752,3 +755,35 @@ def register_snaptrade_tools(server):
             return json.dumps({
                 "error": str(e)
             }, indent=2)
+
+    @server.tool()
+    async def snaptrade_sync_to_db(
+        vault_user_id: Optional[str] = None,
+        snaptrade_user_id: Optional[str] = None,
+        snaptrade_user_secret: Optional[str] = None
+    ) -> str:
+        """
+        Sync SnapTrade accounts and holdings to SQLite database.
+        
+        This fetches all accounts and holdings from SnapTrade and persists them
+        to the local SQLite database. After syncing, you can use list_all_holdings
+        to view the data without making additional API calls.
+        
+        Args:
+            vault_user_id: Vault user ID (uses default user if not provided)
+            snaptrade_user_id: SnapTrade user ID (uses env var if not provided)
+            snaptrade_user_secret: SnapTrade user secret (uses env var if not provided)
+            
+        Returns:
+            JSON string with sync summary
+        """
+        if not vault_user_id:
+            vault_user_id = get_current_user_id()
+        
+        result = await SnapTradeService.sync_to_db(
+            vault_user_id=vault_user_id,
+            snaptrade_user_id=snaptrade_user_id,
+            snaptrade_user_secret=snaptrade_user_secret
+        )
+        
+        return json.dumps(result, indent=2)
