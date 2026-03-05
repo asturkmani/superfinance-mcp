@@ -27,7 +27,9 @@ COPY tools/ ./tools/
 COPY services/ ./services/
 COPY api/ ./api/
 COPY db/ ./db/
-COPY data/ ./data/
+
+# Create data directory (will be overridden by Fly volume mount)
+RUN mkdir -p /data
 COPY README.md ./
 COPY pyproject.toml ./
 
