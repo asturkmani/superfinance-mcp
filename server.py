@@ -173,7 +173,7 @@ if __name__ == "__main__":
                         scope["headers"] = headers
                 await self.app(scope, receive, send)
         
-        app = yfinance_server.http_app(middleware=[TokenFromPathMiddleware])
+        app = yfinance_server.http_app(middleware=[Middleware(TokenFromPathMiddleware)])
 
         # Add a simple health check endpoint for Fly.io
         from starlette.responses import JSONResponse, HTMLResponse
