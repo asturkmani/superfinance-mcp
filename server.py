@@ -132,9 +132,11 @@ if __name__ == "__main__":
 
     # Check if we're running in Fly.io or remote environment
     if os.getenv("FLY_APP_NAME") or os.getenv("PORT"):
-        # Set up auth for HTTP mode
-        from auth import VaultTokenVerifier
-        yfinance_server.auth = VaultTokenVerifier()
+        # Set up OAuth auth for HTTP mode (Claude Desktop requires OAuth 2.1)
+        from auth import VaultOAuthProvider
+        base_url = os.getenv("VAULT_BASE_URL", "https://superfinance-mcp.fly.dev")
+        vault_oauth = VaultOAuthProvider(base_url=base_url)
+        yfinance_server.auth = vault_oauth
         
         # Remote deployment - use HTTP
         port = int(os.getenv("PORT", "8080"))
@@ -148,32 +150,7 @@ if __name__ == "__main__":
             print("Redis cache not available, background refresh disabled")
 
         # Create the MCP app (Starlette-based)
-        # Middleware: extract token from URL path /mcp/{token} → inject as Bearer auth
-        from starlette.middleware import Middleware
-        from starlette.types import ASGIApp, Receive, Scope, Send
-        
-        class TokenFromPathMiddleware:
-            """Extract token from /mcp/{token} path and inject as Authorization header."""
-            def __init__(self, app: ASGIApp):
-                self.app = app
-            
-            async def __call__(self, scope: Scope, receive: Receive, send: Send):
-                if scope["type"] == "http":
-                    path = scope.get("path", "")
-                    # Match /mcp/vault_... pattern
-                    if path.startswith("/mcp/vault_"):
-                        token = path[5:]  # strip "/mcp/"
-                        # Rewrite path to /mcp so FastMCP handles it
-                        scope["path"] = "/mcp"
-                        # Inject Authorization header
-                        headers = list(scope.get("headers", []))
-                        # Remove existing auth header if any
-                        headers = [(k, v) for k, v in headers if k != b"authorization"]
-                        headers.append((b"authorization", f"Bearer {token}".encode()))
-                        scope["headers"] = headers
-                await self.app(scope, receive, send)
-        
-        app = yfinance_server.http_app(middleware=[Middleware(TokenFromPathMiddleware)])
+        app = yfinance_server.http_app()
 
         # Add a simple health check endpoint for Fly.io
         from starlette.responses import JSONResponse, HTMLResponse
@@ -261,9 +238,59 @@ if __name__ == "__main__":
             except ValueError as e:
                 return JSONResponse({"error": str(e)}, status_code=409)
 
+        async def vault_login_page(request):
+            """Serve the OAuth login page."""
+            import pathlib
+            html_path = pathlib.Path(__file__).parent / "static" / "login.html"
+            if html_path.exists():
+                return HTMLResponse(html_path.read_text())
+            return JSONResponse({"error": "Login page not found"}, status_code=404)
+
+        async def vault_auth_endpoint(request):
+            """Handle login/signup from the OAuth login page."""
+            from db import queries
+            import hashlib
+            
+            body = await request.json()
+            request_id = body.get("request_id")
+            email = body.get("email")
+            password = body.get("password")
+            action = body.get("action", "login")
+            name = body.get("name")
+            
+            if not request_id or not email or not password:
+                return JSONResponse({"error": "Missing required fields"}, status_code=400)
+            
+            if action == "signup":
+                # Create new user
+                try:
+                    user_id, _ = queries.signup_user(email, name, password)
+                except ValueError as e:
+                    return JSONResponse({"error": str(e)}, status_code=409)
+            else:
+                # Login — verify credentials
+                user = queries.get_user_by_email(email)
+                if not user:
+                    return JSONResponse({"error": "Invalid email or password"}, status_code=401)
+                
+                pw_hash = hashlib.sha256(password.encode()).hexdigest()
+                if user.get("password_hash") != pw_hash:
+                    return JSONResponse({"error": "Invalid email or password"}, status_code=401)
+                
+                user_id = user["id"]
+            
+            # Complete the OAuth flow
+            try:
+                redirect_url = await vault_oauth.complete_authorization(request_id, user_id)
+                return JSONResponse({"redirect_url": redirect_url})
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=400)
+
         # Add routes
         app.routes.insert(0, Route("/", landing_page))
         app.routes.insert(1, Route("/health", health_check))
+        app.routes.insert(2, Route("/vault-login", vault_login_page))
+        app.routes.insert(3, Route("/vault-auth", vault_auth_endpoint, methods=["POST"]))
         # Add signup route
         app.routes.insert(2, Route("/signup", signup, methods=["POST"]))
         # Add chart serving route

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign in to Vault</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
+            background: #0f0f23;
+            color: #e2e8f0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .card {
+            background: #1a1a2e;
+            border: 1px solid #2a2a4a;
+            border-radius: 16px;
+            padding: 40px;
+            max-width: 400px;
+            width: 100%;
+            margin: 20px;
+        }
+        .logo { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+        .logo span { color: #4ade80; }
+        .subtitle { color: #94a3b8; font-size: 14px; margin-bottom: 28px; }
+        .form-group { margin-bottom: 16px; }
+        label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 6px; font-weight: 500; }
+        input {
+            width: 100%; padding: 12px 16px; background: #0f0f23;
+            border: 1px solid #2a2a4a; border-radius: 10px; color: #e2e8f0;
+            font-size: 15px; outline: none; transition: border-color 0.2s;
+        }
+        input:focus { border-color: #4ade80; }
+        input::placeholder { color: #475569; }
+        button {
+            width: 100%; padding: 14px; background: #4ade80; color: #0f0f23;
+            border: none; border-radius: 10px; font-size: 16px; font-weight: 600;
+            cursor: pointer; margin-top: 8px;
+        }
+        button:hover { background: #22c55e; }
+        button:disabled { background: #2a2a4a; color: #64748b; cursor: not-allowed; }
+        .error { color: #f87171; font-size: 14px; margin-top: 12px; display: none; }
+        .divider { text-align: center; color: #475569; font-size: 13px; margin: 20px 0; }
+        .signup-link { text-align: center; margin-top: 16px; }
+        .signup-link a { color: #4ade80; text-decoration: none; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="logo"><span>⚡</span> Vault</div>
+        <div class="subtitle">Sign in to connect your portfolio to Claude</div>
+        
+        <form id="login-form">
+            <input type="hidden" id="request_id" value="">
+            <div class="form-group">
+                <label>Email</label>
+                <input type="email" id="email" placeholder="you@example.com" required>
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="password" placeholder="Your password" required>
+            </div>
+            <button type="submit" id="submit-btn">Sign In & Connect</button>
+            <div class="error" id="error-msg"></div>
+        </form>
+        
+        <div class="divider">— or —</div>
+        
+        <form id="signup-form">
+            <div class="form-group">
+                <label>New user? Enter your name to create an account:</label>
+                <input type="text" id="name" placeholder="Your name (optional)">
+            </div>
+            <button type="submit" style="background: #2a2a4a; color: #e2e8f0;">Create Account & Connect</button>
+            <div class="error" id="signup-error"></div>
+        </form>
+    </div>
+    
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const requestId = params.get('request_id');
+        document.getElementById('request_id').value = requestId || '';
+        
+        if (!requestId) {
+            document.getElementById('error-msg').textContent = 'Invalid login request. Please try connecting again from Claude.';
+            document.getElementById('error-msg').style.display = 'block';
+        }
+        
+        // Login
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.querySelector('#login-form button');
+            btn.disabled = true;
+            btn.textContent = 'Signing in...';
+            document.getElementById('error-msg').style.display = 'none';
+            
+            try {
+                const res = await fetch('/vault-auth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        request_id: requestId,
+                        email: document.getElementById('email').value,
+                        password: document.getElementById('password').value,
+                        action: 'login'
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Login failed');
+                
+                // Redirect back to Claude with the auth code
+                window.location.href = data.redirect_url;
+            } catch (err) {
+                document.getElementById('error-msg').textContent = err.message;
+                document.getElementById('error-msg').style.display = 'block';
+                btn.disabled = false;
+                btn.textContent = 'Sign In & Connect';
+            }
+        });
+        
+        // Signup
+        document.getElementById('signup-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.querySelector('#signup-form button');
+            btn.disabled = true;
+            btn.textContent = 'Creating account...';
+            document.getElementById('signup-error').style.display = 'none';
+            
+            try {
+                const res = await fetch('/vault-auth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        request_id: requestId,
+                        email: document.getElementById('email').value,
+                        password: document.getElementById('password').value,
+                        name: document.getElementById('name').value || undefined,
+                        action: 'signup'
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Signup failed');
+                
+                window.location.href = data.redirect_url;
+            } catch (err) {
+                document.getElementById('signup-error').textContent = err.message;
+                document.getElementById('signup-error').style.display = 'block';
+                btn.disabled = false;
+                btn.textContent = 'Create Account & Connect';
+            }
+        });
+    </script>
+</body>
+</html>
