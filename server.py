@@ -148,11 +148,44 @@ if __name__ == "__main__":
             print("Redis cache not available, background refresh disabled")
 
         # Create the MCP app (Starlette-based)
-        app = yfinance_server.http_app()
+        # Middleware: extract token from URL path /mcp/{token} → inject as Bearer auth
+        from starlette.middleware import Middleware
+        from starlette.types import ASGIApp, Receive, Scope, Send
+        
+        class TokenFromPathMiddleware:
+            """Extract token from /mcp/{token} path and inject as Authorization header."""
+            def __init__(self, app: ASGIApp):
+                self.app = app
+            
+            async def __call__(self, scope: Scope, receive: Receive, send: Send):
+                if scope["type"] == "http":
+                    path = scope.get("path", "")
+                    # Match /mcp/vault_... pattern
+                    if path.startswith("/mcp/vault_"):
+                        token = path[5:]  # strip "/mcp/"
+                        # Rewrite path to /mcp so FastMCP handles it
+                        scope["path"] = "/mcp"
+                        # Inject Authorization header
+                        headers = list(scope.get("headers", []))
+                        # Remove existing auth header if any
+                        headers = [(k, v) for k, v in headers if k != b"authorization"]
+                        headers.append((b"authorization", f"Bearer {token}".encode()))
+                        scope["headers"] = headers
+                await self.app(scope, receive, send)
+        
+        app = yfinance_server.http_app(middleware=[TokenFromPathMiddleware])
 
         # Add a simple health check endpoint for Fly.io
         from starlette.responses import JSONResponse, HTMLResponse
         from starlette.routing import Route, Mount
+
+        async def landing_page(request):
+            """Serve the landing page."""
+            import pathlib
+            html_path = pathlib.Path(__file__).parent / "static" / "index.html"
+            if html_path.exists():
+                return HTMLResponse(html_path.read_text())
+            return JSONResponse({"error": "Landing page not found"}, status_code=404)
 
         async def health_check(request):
             cache_status = "ok" if cache.is_cache_available() else "unavailable"
@@ -210,17 +243,26 @@ if __name__ == "__main__":
             
             try:
                 user_id, token = queries.signup_user(email, name, password)
+                base = os.getenv("VAULT_BASE_URL", "https://superfinance-mcp.fly.dev")
+                mcp_url = f"{base}/mcp/{token}"
                 return JSONResponse({
                     "user_id": user_id,
                     "token": token,
-                    "mcp_url": f"https://joinvault.xyz/mcp",
-                    "instructions": "Add this MCP server to your AI client with the token as Bearer auth"
+                    "mcp_url": mcp_url,
+                    "instructions": "Add this URL as your MCP server — no extra auth config needed",
+                    "claude_desktop_config": {
+                        "mcpServers": {
+                            "vault": {
+                                "url": mcp_url
+                            }
+                        }
+                    }
                 })
             except ValueError as e:
                 return JSONResponse({"error": str(e)}, status_code=409)
 
-        # Add health check route
-        app.routes.insert(0, Route("/", health_check))
+        # Add routes
+        app.routes.insert(0, Route("/", landing_page))
         app.routes.insert(1, Route("/health", health_check))
         # Add signup route
         app.routes.insert(2, Route("/signup", signup, methods=["POST"]))
