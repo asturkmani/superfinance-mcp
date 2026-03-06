@@ -126,7 +126,7 @@ class VaultOAuthProvider(OAuthProvider):
         
         # Build redirect URI back to Claude
         return construct_redirect_uri(
-            redirect_uri=params.redirect_uri,
+            redirect_uri_base=str(params.redirect_uri),
             code=code_str,
             state=params.state,
         )

@@ -3,30 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sign in to Vault</title>
+    <title>Vault — Connect</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
-            background: #0f0f23;
-            color: #e2e8f0;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            background: #0f0f23; color: #e2e8f0;
+            min-height: 100vh; display: flex; align-items: center; justify-content: center;
         }
         .card {
-            background: #1a1a2e;
-            border: 1px solid #2a2a4a;
-            border-radius: 16px;
-            padding: 40px;
-            max-width: 400px;
-            width: 100%;
-            margin: 20px;
+            background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 16px;
+            padding: 40px; max-width: 400px; width: 100%; margin: 20px;
         }
-        .logo { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+        .logo { font-size: 24px; font-weight: 700; margin-bottom: 24px; }
         .logo span { color: #4ade80; }
-        .subtitle { color: #94a3b8; font-size: 14px; margin-bottom: 28px; }
+        
+        /* Tabs */
+        .tabs { display: flex; gap: 0; margin-bottom: 28px; border-bottom: 1px solid #2a2a4a; }
+        .tab {
+            flex: 1; padding: 12px; text-align: center; font-size: 15px; font-weight: 600;
+            cursor: pointer; color: #64748b; border-bottom: 2px solid transparent;
+            transition: all 0.2s; background: none; border-top: none; border-left: none; border-right: none;
+        }
+        .tab.active { color: #4ade80; border-bottom-color: #4ade80; }
+        .tab:hover { color: #94a3b8; }
+        
         .form-group { margin-bottom: 16px; }
         label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 6px; font-weight: 500; }
         input {
@@ -36,121 +37,116 @@
         }
         input:focus { border-color: #4ade80; }
         input::placeholder { color: #475569; }
-        button {
+        button[type="submit"] {
             width: 100%; padding: 14px; background: #4ade80; color: #0f0f23;
             border: none; border-radius: 10px; font-size: 16px; font-weight: 600;
             cursor: pointer; margin-top: 8px;
         }
-        button:hover { background: #22c55e; }
-        button:disabled { background: #2a2a4a; color: #64748b; cursor: not-allowed; }
+        button[type="submit"]:hover { background: #22c55e; }
+        button[type="submit"]:disabled { background: #2a2a4a; color: #64748b; cursor: not-allowed; }
         .error { color: #f87171; font-size: 14px; margin-top: 12px; display: none; }
-        .divider { text-align: center; color: #475569; font-size: 13px; margin: 20px 0; }
-        .signup-link { text-align: center; margin-top: 16px; }
-        .signup-link a { color: #4ade80; text-decoration: none; font-size: 14px; }
+        .panel { display: none; }
+        .panel.active { display: block; }
     </style>
 </head>
 <body>
     <div class="card">
         <div class="logo"><span>⚡</span> Vault</div>
-        <div class="subtitle">Sign in to connect your portfolio to Claude</div>
         
-        <form id="login-form">
-            <input type="hidden" id="request_id" value="">
-            <div class="form-group">
-                <label>Email</label>
-                <input type="email" id="email" placeholder="you@example.com" required>
-            </div>
-            <div class="form-group">
-                <label>Password</label>
-                <input type="password" id="password" placeholder="Your password" required>
-            </div>
-            <button type="submit" id="submit-btn">Sign In & Connect</button>
-            <div class="error" id="error-msg"></div>
-        </form>
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('signin')">Sign In</button>
+            <button class="tab" onclick="showTab('signup')">Sign Up</button>
+        </div>
         
-        <div class="divider">— or —</div>
+        <!-- Sign In -->
+        <div class="panel active" id="signin-panel">
+            <form id="signin-form">
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="si-email" placeholder="you@example.com" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="si-password" placeholder="Your password" required>
+                </div>
+                <button type="submit" id="si-btn">Sign In</button>
+                <div class="error" id="si-error"></div>
+            </form>
+        </div>
         
-        <form id="signup-form">
-            <div class="form-group">
-                <label>New user? Enter your name to create an account:</label>
-                <input type="text" id="name" placeholder="Your name (optional)">
-            </div>
-            <button type="submit" style="background: #2a2a4a; color: #e2e8f0;">Create Account & Connect</button>
-            <div class="error" id="signup-error"></div>
-        </form>
+        <!-- Sign Up -->
+        <div class="panel" id="signup-panel">
+            <form id="signup-form">
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="su-email" placeholder="you@example.com" required>
+                </div>
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="su-name" placeholder="Your name">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="su-password" placeholder="Choose a password" required minlength="6">
+                </div>
+                <button type="submit" id="su-btn">Create Account</button>
+                <div class="error" id="su-error"></div>
+            </form>
+        </div>
     </div>
     
     <script>
         const params = new URLSearchParams(window.location.search);
         const requestId = params.get('request_id');
-        document.getElementById('request_id').value = requestId || '';
         
-        if (!requestId) {
-            document.getElementById('error-msg').textContent = 'Invalid login request. Please try connecting again from Claude.';
-            document.getElementById('error-msg').style.display = 'block';
+        function showTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.querySelector(`.tab:nth-child(${tab === 'signin' ? 1 : 2})`).classList.add('active');
+            document.getElementById(`${tab === 'signin' ? 'signin' : 'signup'}-panel`).classList.add('active');
         }
         
-        // Login
-        document.getElementById('login-form').addEventListener('submit', async (e) => {
+        async function doAuth(action, email, password, name) {
+            const res = await fetch('/vault-auth', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ request_id: requestId, email, password, name, action })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Failed');
+            window.location.href = data.redirect_url;
+        }
+        
+        document.getElementById('signin-form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const btn = document.querySelector('#login-form button');
-            btn.disabled = true;
-            btn.textContent = 'Signing in...';
-            document.getElementById('error-msg').style.display = 'none';
-            
+            const btn = document.getElementById('si-btn');
+            const err = document.getElementById('si-error');
+            err.style.display = 'none';
+            btn.disabled = true; btn.textContent = 'Signing in...';
             try {
-                const res = await fetch('/vault-auth', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        request_id: requestId,
-                        email: document.getElementById('email').value,
-                        password: document.getElementById('password').value,
-                        action: 'login'
-                    })
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || 'Login failed');
-                
-                // Redirect back to Claude with the auth code
-                window.location.href = data.redirect_url;
-            } catch (err) {
-                document.getElementById('error-msg').textContent = err.message;
-                document.getElementById('error-msg').style.display = 'block';
-                btn.disabled = false;
-                btn.textContent = 'Sign In & Connect';
+                await doAuth('login', 
+                    document.getElementById('si-email').value,
+                    document.getElementById('si-password').value);
+            } catch (ex) {
+                err.textContent = ex.message; err.style.display = 'block';
+                btn.disabled = false; btn.textContent = 'Sign In';
             }
         });
         
-        // Signup
         document.getElementById('signup-form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const btn = document.querySelector('#signup-form button');
-            btn.disabled = true;
-            btn.textContent = 'Creating account...';
-            document.getElementById('signup-error').style.display = 'none';
-            
+            const btn = document.getElementById('su-btn');
+            const err = document.getElementById('su-error');
+            err.style.display = 'none';
+            btn.disabled = true; btn.textContent = 'Creating account...';
             try {
-                const res = await fetch('/vault-auth', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        request_id: requestId,
-                        email: document.getElementById('email').value,
-                        password: document.getElementById('password').value,
-                        name: document.getElementById('name').value || undefined,
-                        action: 'signup'
-                    })
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || 'Signup failed');
-                
-                window.location.href = data.redirect_url;
-            } catch (err) {
-                document.getElementById('signup-error').textContent = err.message;
-                document.getElementById('signup-error').style.display = 'block';
-                btn.disabled = false;
-                btn.textContent = 'Create Account & Connect';
+                await doAuth('signup',
+                    document.getElementById('su-email').value,
+                    document.getElementById('su-password').value,
+                    document.getElementById('su-name').value || undefined);
+            } catch (ex) {
+                err.textContent = ex.message; err.style.display = 'block';
+                btn.disabled = false; btn.textContent = 'Create Account';
             }
         });
     </script>
