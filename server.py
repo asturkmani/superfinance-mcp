@@ -22,24 +22,27 @@ yfinance_server = FastMCP(
     instructions="""
 # SuperFinance MCP Server
 
-Financial data, portfolio management, and visualization tools.
+Financial data, account management, and visualization tools.
 
-## Portfolio Management (Unified)
+## Account Management (SQLite-based)
 
-Single interface for both manual portfolios and synced brokerage accounts:
+Unified system for manual and synced brokerage accounts:
 
-- list_portfolios(type): List all portfolios. Filter by "all", "manual", or "synced".
-- get_portfolio(id): Get positions in any portfolio with live prices.
-- add_portfolio(name, type): Create manual portfolio or connect brokerage (returns OAuth URL).
-- delete_portfolio(id): Delete manual portfolio or disconnect brokerage.
-- add_position(portfolio_id, symbol, units, cost): Add position to manual portfolio.
-- update_position(portfolio_id, position_id, ...): Update position in manual portfolio.
-- remove_position(portfolio_id, position_id): Remove position from manual portfolio.
-- sync_portfolio(id): Force refresh synced portfolio from brokerage.
-- get_transactions(portfolio_id, start, end): Get transaction history (synced only).
+- create_account(name, type?, currency?): Create a manual account for tracking holdings.
+- list_accounts(): List all accounts (manual and synced).
+- get_account(account_id): Get account details.
+- delete_account(account_id): Delete an account.
+- add_holding(account_id, symbol, quantity, cost, ...): Add a holding to an account.
+- update_holding(holding_id, ...): Update holding details.
+- remove_holding(holding_id): Remove a holding.
+- add_transaction(account_id, symbol, type, quantity, price, ...): Record a transaction.
 
-Manual portfolios: User-managed, supports private equity (.PVT suffix), manual pricing.
-Synced portfolios: Read-only positions from connected brokerages via SnapTrade.
+Manual accounts: User-managed, supports private equity (.PVT suffix), manual pricing.
+Synced accounts: Automatically synced from connected brokerages via SnapTrade.
+
+## Aggregate Holdings View
+
+- list_all_holdings(currency?): Unified view of ALL positions from ALL accounts with live prices and AI-classified categories.
 
 ## Liabilities Tracking
 
@@ -70,16 +73,27 @@ Use update_classifications() to:
 
 Single chart() tool for all visualizations:
 
-- chart(type="portfolio"): Interactive dashboard with pie/treemap toggle, groupings by ticker/name/category/brokerage.
+- chart(type="portfolio", currency?): Interactive dashboard with pie/treemap toggle, groupings by ticker/name/category/brokerage.
   Shows Assets/Liabilities toggle when liabilities exist, with Net Worth summary in header.
 - chart(type="price", tickers="AAPL"): TradingView chart with live market data.
 - chart(type="price", tickers="AAPL,MSFT,GOOG"): Compare multiple tickers.
 
 Charts return URLs that expire after 24 hours.
 
-## Aggregate View
+## Dashboard Management
 
-- list_all_holdings(currency): Unified view of ALL positions from ALL sources with live prices and AI-classified categories.
+Create custom dashboards with widgets:
+
+- create_dashboard(name, description?, layout?): Create a new dashboard.
+- list_dashboards(): List all dashboards.
+- get_dashboard(dashboard_id): Get dashboard with widgets.
+- delete_dashboard(dashboard_id): Delete a dashboard.
+- add_widget(dashboard_id, type, config, ...): Add a widget to a dashboard.
+- update_widget(widget_id, ...): Update widget configuration.
+- remove_widget(widget_id): Remove a widget.
+- get_dashboard_data(dashboard_id): Get dashboard with live data.
+
+Widget types: net_worth, allocation, performance, holdings_table, price_chart, watchlist.
 
 ## Market Data (Yahoo Finance)
 
@@ -93,6 +107,13 @@ Charts return URLs that expire after 24 hours.
 - get_holder_info: Institutional holders, insider activity.
 - get_stock_actions: Dividends and splits.
 - get_yahoo_finance_news: News for a ticker.
+
+## Discovery & Analysis
+
+- discover_equities(country?, sector?, exchange?): Search stocks and ETFs.
+- get_company_overview(ticker): Company fundamentals and metrics.
+- calculate_technical_indicators(ticker, period): RSI, MACD, moving averages, etc.
+- get_valuation_ratios(ticker, period): P/E, P/B, P/S, EV/EBITDA, etc.
 
 ## Cache Management
 
