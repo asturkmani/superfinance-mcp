@@ -152,23 +152,6 @@ if __name__ == "__main__":
         # Create the MCP app (Starlette-based)
         app = yfinance_server.http_app()
 
-        # Add exception logging middleware
-        from starlette.middleware import Middleware
-        from starlette.middleware.base import BaseHTTPMiddleware
-        import traceback as _tb
-
-        class ErrorLoggingMiddleware(BaseHTTPMiddleware):
-            async def dispatch(self, request, call_next):
-                try:
-                    response = await call_next(request)
-                    return response
-                except Exception as e:
-                    print(f"[ERROR] {request.method} {request.url.path}: {type(e).__name__}: {e}")
-                    _tb.print_exc()
-                    raise
-
-        app.add_middleware(ErrorLoggingMiddleware)
-
         # Add a simple health check endpoint for Fly.io
         from starlette.responses import JSONResponse, HTMLResponse
         from starlette.routing import Route, Mount
