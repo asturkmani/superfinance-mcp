@@ -59,6 +59,8 @@ class VaultOAuthProvider(OAuthProvider):
         self.auth_codes: dict[str, AuthorizationCode] = {}
         self.tokens: dict[str, AccessToken] = {}
         self.refresh_tokens: dict[str, RefreshToken] = {}
+        # Map auth code -> user_id (AuthorizationCode has no metadata field)
+        self.code_user_map: dict[str, str] = {}
 
     # === Client Registration ===
 
@@ -119,10 +121,10 @@ class VaultOAuthProvider(OAuthProvider):
             code_challenge=params.code_challenge,
             scopes=params.scopes or ["vault:full"],
             expires_at=now + AUTH_CODE_EXPIRY,
-            # Store user_id so we can create the right token
-            metadata={"user_id": user_id},
         )
         self.auth_codes[code_str] = auth_code
+        # Store user_id separately (AuthorizationCode has no metadata field)
+        self.code_user_map[code_str] = user_id
         
         # Build redirect URI back to Claude
         return construct_redirect_uri(
@@ -150,10 +152,8 @@ class VaultOAuthProvider(OAuthProvider):
         """Exchange auth code for tokens. Creates a vault_ API token for the user."""
         from db import queries
         
-        # Get user_id from the auth code metadata
-        user_id = None
-        if hasattr(authorization_code, 'metadata') and authorization_code.metadata:
-            user_id = authorization_code.metadata.get('user_id')
+        # Get user_id from our code->user mapping
+        user_id = self.code_user_map.pop(authorization_code.code, None)
         
         if not user_id:
             raise TokenError(error="invalid_grant", error_description="No user associated with this code")
