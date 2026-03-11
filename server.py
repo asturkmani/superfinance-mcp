@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 import cache
 import refresh
-from tools import register_all_tools
+from tools.__init___v2 import register_all_tools_v2
 
 # Load environment variables from .env file (for local development)
 env_path = Path(__file__).parent / '.env'
@@ -24,106 +24,249 @@ yfinance_server = FastMCP(
 
 Financial data, account management, and visualization tools.
 
-## Account Management (SQLite-based)
+## Tool Overview (16 consolidated tools)
 
-Unified system for manual and synced brokerage accounts:
+All tools use an `action` parameter to dispatch to specific operations:
 
-- create_account(name, type?, currency?): Create a manual account for tracking holdings.
-- list_accounts(): List all accounts (manual and synced).
-- get_account(account_id): Get account details.
-- delete_account(account_id): Delete an account.
-- add_holding(account_id, symbol, quantity, cost, ...): Add a holding to an account.
-- update_holding(holding_id, ...): Update holding details.
-- remove_holding(holding_id): Remove a holding.
-- add_transaction(account_id, symbol, type, quantity, price, ...): Record a transaction.
+1. **account** - Manage accounts (create|list|get|update|delete)
+2. **holding** - Manage holdings (list|list_all|add|update|remove)
+3. **transaction** - Manage transactions (list|add|delete)
+4. **liability** - Manage liabilities (list|add|update|remove)
+5. **classify** - Manage classifications (list_categories|list|add_categories|update)
+6. **dashboard** - Manage dashboards (create|list|get|delete|add_widget|update_widget|remove_widget)
+7. **chart** - Generate visualizations (portfolio|price)
+8. **market** - Market data (profile|history|quote|fx|actions|financials|holders|recommendations|news)
+9. **options** - Options data (chain|analyze)
+10. **discover** - Search securities (search|lookup)
+11. **analyze** - Analytics (technicals|risk|performance|ratios)
+12. **portfolio** - Portfolio analytics (technicals|risk|performance|ratios|correlation|reconcile)
+13. **sync** - SnapTrade sync (connect|status|sync_to_db|sync_accounts|sync_holdings|sync_transactions|refresh|disconnect)
+14. **cache** - Cache management (status|refresh)
+15. **token** - API tokens (create|list|revoke)
+16. **calculate** - Python calculations
 
-Manual accounts: User-managed, supports private equity (.PVT suffix), manual pricing.
-Synced accounts: Automatically synced from connected brokerages via SnapTrade.
+## Account Management
 
-## Aggregate Holdings View
+**account(action, ...)**: Manage accounts (portfolio buckets)
+- create: Create manual account for tracking
+- list: List all accounts (manual and synced)
+- get: Get account details
+- update: Update account name (manual only)
+- delete: Delete account and all holdings/transactions
 
-- list_all_holdings(currency?): Unified view of ALL positions from ALL accounts with live prices and AI-classified categories.
+Examples:
+```
+account(action="create", name="Vanguard ISA", currency="GBP")
+account(action="list")
+account(action="delete", account_id="acc_123")
+```
 
-## Liabilities Tracking
+## Holdings Management
 
-Track debts for net worth calculations:
+**holding(action, ...)**: Manage positions
+- list: Get holdings for an account
+- list_all: Get all holdings with live prices
+- add: Add/update holding in manual account
+- update: Update holding details
+- remove: Remove holding
 
-- list_liabilities(): List all liabilities with total balance.
-- add_liability(name, balance, type?, interest_rate?, currency?, notes?): Add mortgage, loan, credit card, etc.
-- update_liability(liability_id, ...): Update balance or other details.
-- remove_liability(liability_id): Remove a liability.
+Examples:
+```
+holding(action="list", account_id="acc_123")
+holding(action="list_all", reporting_currency="GBP")
+holding(action="add", account_id="acc_123", symbol="AAPL", quantity=10)
+```
 
-Types: mortgage, auto_loan, credit_card, student_loan, personal_loan, line_of_credit, other.
+## Transactions
 
-## Classification Management
+**transaction(action, ...)**: Manage transactions
+- list: Get transactions (by account or symbol)
+- add: Add transaction to manual account
+- delete: Delete transaction
 
-Override AI-generated classifications for custom groupings:
+Examples:
+```
+transaction(action="list", account_id="acc_123")
+transaction(action="add", account_id="acc_123", symbol="AAPL", date="2024-01-15", transaction_type="buy", quantity=10, price=150.00)
+```
 
-- list_categories(): List available categories (Technology, Memory, Commodities, etc.)
-- list_classifications(category?): List all symbol→name/category mappings.
-- update_classifications(updates): Batch update symbols. Each update has: symbol, name?, category?
-- add_categories(categories): Add multiple new categories.
+## Liabilities
 
-Use update_classifications() to:
-- Group related tickers: [{"symbol": "GOOG", "name": "Google"}, {"symbol": "GOOGL", "name": "Google"}]
-- Change categories: [{"symbol": "IREN", "category": "AI Infrastructure"}]
-- Batch updates for efficiency
+**liability(action, ...)**: Track debts
+- list: List all liabilities
+- add: Add mortgage, loan, credit card, etc.
+- update: Update balance or details
+- remove: Remove liability
+
+Examples:
+```
+liability(action="list")
+liability(action="add", name="Home Mortgage", balance=450000, type="mortgage", interest_rate=4.5)
+```
+
+## Classifications
+
+**classify(action, ...)**: Manage categories and name mappings
+- list_categories: List available categories
+- list: List all classifications (filter by category)
+- add_categories: Add new categories
+- update: Update symbol classifications
+
+Examples:
+```
+classify(action="list_categories")
+classify(action="update", updates=[{"symbol": "IREN", "category": "AI Infrastructure"}])
+```
+
+## Dashboards
+
+**dashboard(action, ...)**: Custom dashboards with widgets
+- create: Create dashboard
+- list: List all dashboards
+- get: Get dashboard URL
+- delete: Delete dashboard
+- add_widget: Add widget (stock_chart, portfolio_pie, etc.)
+- update_widget: Update widget config
+- remove_widget: Remove widget
+
+Examples:
+```
+dashboard(action="create", name="My Portfolio")
+dashboard(action="add_widget", dashboard_id="dash_123", widget_type="portfolio_pie")
+```
 
 ## Visualization
 
-Single chart() tool for all visualizations:
+**chart(type, ...)**: Generate charts
+- portfolio: Interactive dashboard (pie/treemap toggle)
+- price: TradingView price charts
 
-- chart(type="portfolio", currency?): Interactive dashboard with pie/treemap toggle, groupings by ticker/name/category/brokerage.
-  Shows Assets/Liabilities toggle when liabilities exist, with Net Worth summary in header.
-- chart(type="price", tickers="AAPL"): TradingView chart with live market data.
-- chart(type="price", tickers="AAPL,MSFT,GOOG"): Compare multiple tickers.
+Examples:
+```
+chart(type="portfolio", currency="GBP")
+chart(type="price", tickers="AAPL,MSFT")
+```
 
-Charts return URLs that expire after 24 hours.
+## Market Data
 
-## Dashboard Management
+**market(action, tickers, ...)**: Yahoo Finance data
+- profile: Company info and metrics
+- history: Historical OHLCV data
+- quote: Current price
+- fx: Exchange rates
+- actions: Dividends and splits
+- financials: Financial statements
+- holders: Holder information
+- recommendations: Analyst recommendations
+- news: Latest news
 
-Create custom dashboards with widgets:
+Examples:
+```
+market(action="quote", tickers="AAPL,MSFT")
+market(action="history", tickers="AAPL", period="1y")
+market(action="fx", from_currency="GBP", to_currency="USD")
+```
 
-- create_dashboard(name, description?, layout?): Create a new dashboard.
-- list_dashboards(): List all dashboards.
-- get_dashboard(dashboard_id): Get dashboard with widgets.
-- delete_dashboard(dashboard_id): Delete a dashboard.
-- add_widget(dashboard_id, type, config, ...): Add a widget to a dashboard.
-- update_widget(widget_id, ...): Update widget configuration.
-- remove_widget(widget_id): Remove a widget.
-- get_dashboard_data(dashboard_id): Get dashboard with live data.
+## Options
 
-Widget types: net_worth, allocation, performance, holdings_table, price_chart, watchlist.
+**options(action, ticker, ...)**: Options data
+- chain: Get option chain for expiration
+- analyze: Get options analysis with Greeks
 
-## Market Data (Yahoo Finance)
+Examples:
+```
+options(action="chain", ticker="AAPL", expiration_date="2024-06-21", option_type="calls")
+options(action="analyze", ticker="AAPL")
+```
 
-- get_stock_info: Company info for one or more tickers (comma-separated).
-- get_historical_stock_prices: Historical OHLCV data.
-- get_fx_rate: Currency exchange rates.
-- get_option_chain: Options data with Greeks.
-- get_option_expiration_dates: Available option expirations.
-- get_recommendations: Analyst recommendations.
-- get_financial_statement: Income, balance sheet, cash flow.
-- get_holder_info: Institutional holders, insider activity.
-- get_stock_actions: Dividends and splits.
-- get_yahoo_finance_news: News for a ticker.
+## Discovery
 
-## Discovery & Analysis
+**discover(action, ...)**: Search securities
+- search: Search by sector, industry, country
+- lookup: Get ticker details
 
-- discover_equities(country?, sector?, exchange?): Search stocks and ETFs.
-- get_company_overview(ticker): Company fundamentals and metrics.
-- calculate_technical_indicators(ticker, period): RSI, MACD, moving averages, etc.
-- get_valuation_ratios(ticker, period): P/E, P/B, P/S, EV/EBITDA, etc.
+Examples:
+```
+discover(action="search", type="equity", sector="Technology")
+discover(action="lookup", ticker="AAPL")
+```
 
-## Cache Management
+## Analytics
 
-- refresh_cache(type): Force refresh prices, fx rates, holdings, or all.
-- get_cache_status: Check cache health and refresh times.
+**analyze(action, tickers, ...)**: Financial analysis
+- technicals: RSI, MACD, Bollinger, EMA
+- risk: VaR, CVaR, max drawdown, beta, Sharpe
+- performance: CAGR, alpha
+- ratios: P/E, ROE, debt ratios
+
+Examples:
+```
+analyze(action="technicals", tickers="AAPL", indicators="rsi,macd")
+analyze(action="risk", tickers="AAPL,MSFT", period="3y")
+```
+
+## Portfolio Analytics
+
+**portfolio(action, ...)**: Portfolio-aware analytics
+- technicals: Technical indicators for all positions
+- risk: Risk metrics for all positions
+- performance: Performance for all positions
+- ratios: Financial ratios for all positions
+- correlation: Correlation matrix
+- reconcile: Reconcile holdings vs transactions
+
+Examples:
+```
+portfolio(action="risk", period="3y")
+portfolio(action="correlation")
+portfolio(action="reconcile")
+```
+
+## SnapTrade Sync
+
+**sync(action, ...)**: Brokerage integration
+- connect: Get connection URL
+- status: List connected accounts
+- sync_to_db: Sync all to local database
+- sync_accounts: List accounts
+- sync_holdings: Get holdings for account
+- sync_transactions: Get transactions
+- refresh: Manual refresh
+- disconnect: Remove connection
+
+Examples:
+```
+sync(action="connect")
+sync(action="sync_to_db")
+sync(action="status")
+```
+
+## Cache & Tokens
+
+**cache(action, ...)**: Cache management
+- status: Get cache health
+- refresh: Force refresh (prices|fx|holdings|all)
+
+**token(action, ...)**: API tokens
+- create: Create new token
+- list: List tokens (masked)
+- revoke: Revoke token
+
+**calculate(expression)**: Execute Python calculations
+- Math, numpy, pandas available
+- Financial computations
+
+Examples:
+```
+cache(action="status")
+token(action="create", name="desktop")
+calculate("sum([100, 200, 300])")
+```
 """,
 )
 
-# Register all tools from modules
-register_all_tools(yfinance_server)
+# Register all tools from modules (V2 consolidated)
+register_all_tools_v2(yfinance_server)
 
 
 if __name__ == "__main__":
