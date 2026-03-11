@@ -150,16 +150,27 @@ class VaultOAuthProvider(OAuthProvider):
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
     ) -> OAuthToken:
         """Exchange auth code for tokens. Creates a vault_ API token for the user."""
+        import traceback
         from db import queries
+        
+        print(f"[OAuth] exchange_authorization_code called for code={authorization_code.code[:8]}...")
+        print(f"[OAuth] code_user_map keys: {list(self.code_user_map.keys())[:5]}")
         
         # Get user_id from our code->user mapping
         user_id = self.code_user_map.pop(authorization_code.code, None)
+        print(f"[OAuth] user_id from map: {user_id}")
         
         if not user_id:
             raise TokenError(error="invalid_grant", error_description="No user associated with this code")
         
-        # Create a real vault_ API token for this user
-        token_str = queries.create_api_token(user_id, name=f"claude-{client.client_id[:8]}")
+        try:
+            # Create a real vault_ API token for this user
+            token_str = queries.create_api_token(user_id, name=f"claude-{client.client_id[:8]}")
+            print(f"[OAuth] Created token: {token_str[:12]}...")
+        except Exception as e:
+            print(f"[OAuth] ERROR creating token: {e}")
+            traceback.print_exc()
+            raise
         
         now = time.time()
         access_token = AccessToken(
