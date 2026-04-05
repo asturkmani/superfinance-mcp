@@ -6,29 +6,6 @@ import pandas as pd
 import yfinance as yf
 
 
-class FinancialType(str, Enum):
-    income_stmt = "income_stmt"
-    quarterly_income_stmt = "quarterly_income_stmt"
-    balance_sheet = "balance_sheet"
-    quarterly_balance_sheet = "quarterly_balance_sheet"
-    cashflow = "cashflow"
-    quarterly_cashflow = "quarterly_cashflow"
-
-
-class HolderType(str, Enum):
-    major_holders = "major_holders"
-    institutional_holders = "institutional_holders"
-    mutualfund_holders = "mutualfund_holders"
-    insider_transactions = "insider_transactions"
-    insider_purchases = "insider_purchases"
-    insider_roster_holders = "insider_roster_holders"
-
-
-class RecommendationType(str, Enum):
-    recommendations = "recommendations"
-    upgrades_downgrades = "upgrades_downgrades"
-
-
 def register_market_v2(server):
     """Register consolidated market data tool."""
 
