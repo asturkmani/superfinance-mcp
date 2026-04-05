@@ -1,14 +1,8 @@
 """Consolidated market data tool."""
 
 import json
-import math
-import sys
-from io import StringIO
-from enum import Enum
-from typing import Optional
 
 import pandas as pd
-import numpy as np
 import yfinance as yf
 
 
