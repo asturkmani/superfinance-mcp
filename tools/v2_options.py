@@ -2,7 +2,6 @@
 
 import json
 import yfinance as yf
-from services.analytics import AnalyticsService
 
 
 def register_options_v2(server):
@@ -16,11 +15,11 @@ def register_options_v2(server):
         option_type: str = "calls"
     ) -> str:
         """
-        Get options data and analysis.
+        Get options data from Yahoo Finance.
 
         Actions:
         - chain: Get option chain for a specific expiration
-        - analyze: Get options analysis with Greeks
+        - analyze: Get options summary with all expirations and Greeks
 
         Args:
             action: Action to perform (chain|analyze)
@@ -41,15 +40,7 @@ def register_options_v2(server):
             ticker = ticker.strip().upper()
             company = yf.Ticker(ticker)
 
-            # Verify ticker exists
-            try:
-                if company.isin is None:
-                    return json.dumps({"error": f"Ticker {ticker} not found"})
-            except Exception as e:
-                return json.dumps({"error": str(e)})
-
             if action == "chain":
-                # If no expiration date, return available dates
                 if not expiration_date:
                     return json.dumps({
                         "ticker": ticker,
@@ -57,20 +48,17 @@ def register_options_v2(server):
                         "message": "Provide expiration_date parameter to get option chain"
                     }, indent=2)
 
-                # Validate expiration date
                 if expiration_date not in company.options:
                     return json.dumps({
                         "error": f"No options available for {expiration_date}",
                         "available_expirations": list(company.options)
                     }, indent=2)
 
-                # Validate option type
                 if option_type not in ["calls", "puts"]:
                     return json.dumps({
                         "error": "Invalid option_type. Use 'calls' or 'puts'."
                     }, indent=2)
 
-                # Get option chain
                 option_chain = company.option_chain(expiration_date)
                 if option_type == "calls":
                     return option_chain.calls.to_json(orient="records", date_format="iso")
@@ -78,7 +66,33 @@ def register_options_v2(server):
                     return option_chain.puts.to_json(orient="records", date_format="iso")
 
             elif action == "analyze":
-                result = AnalyticsService.get_options_analysis(ticker)
+                expirations = list(company.options)
+                if not expirations:
+                    return json.dumps({"ticker": ticker, "message": "No options data available"})
+
+                info = company.info
+                current_price = info.get("regularMarketPrice") or info.get("currentPrice")
+
+                result = {
+                    "ticker": ticker,
+                    "current_price": current_price,
+                    "expirations": expirations,
+                    "chains": {}
+                }
+
+                # Get chains for first few expirations to keep response manageable
+                for exp in expirations[:3]:
+                    chain = company.option_chain(exp)
+                    calls_summary = {
+                        "count": len(chain.calls),
+                        "data": json.loads(chain.calls.to_json(orient="records", date_format="iso"))
+                    }
+                    puts_summary = {
+                        "count": len(chain.puts),
+                        "data": json.loads(chain.puts.to_json(orient="records", date_format="iso"))
+                    }
+                    result["chains"][exp] = {"calls": calls_summary, "puts": puts_summary}
+
                 return json.dumps(result, indent=2)
 
             else:

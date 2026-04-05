@@ -1,4 +1,4 @@
-# Multi-stage build for Yahoo Finance MCP server
+# Multi-stage build for SuperFinance MCP server
 FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS builder
 
 WORKDIR /app
@@ -19,19 +19,7 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 
 # Copy application code
 COPY server.py ./
-COPY cache.py ./
-COPY refresh.py ./
-COPY auth.py ./
-COPY helpers/ ./helpers/
 COPY tools/ ./tools/
-COPY services/ ./services/
-COPY api/ ./api/
-COPY db/ ./db/
-COPY static/ ./static/
-
-# Create data directory (will be overridden by Fly volume mount)
-RUN mkdir -p /data
-COPY README.md ./
 COPY pyproject.toml ./
 
 # Expose port
