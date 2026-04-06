@@ -6,24 +6,31 @@ WORKDIR /app
 # Copy dependency files
 COPY pyproject.toml uv.lock ./
 
-# Install dependencies
-RUN uv pip install --system -e .
+# Copy application code (needed for -e install)
+COPY server.py ./
+COPY tools/ ./tools/
+
+# Install dependencies using the lockfile
+RUN uv sync --frozen --no-dev
 
 # Stage 2: Runtime
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy Python packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+# Copy the virtual environment from builder
+COPY --from=builder /app/.venv /app/.venv
 
 # Copy application code
 COPY server.py ./
 COPY tools/ ./tools/
 COPY pyproject.toml ./
 
+# Use the venv
+ENV PATH="/app/.venv/bin:$PATH"
+
 # Expose port
 EXPOSE 8080
 
-# Run server directly with Python (fastmcp handles HTTP transport)
+# Run server
 CMD ["python", "server.py"]
