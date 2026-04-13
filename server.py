@@ -97,9 +97,7 @@ if __name__ == "__main__":
         from starlette.applications import Starlette
         from starlette.responses import JSONResponse, HTMLResponse
         from starlette.requests import Request
-        from starlette.routing import Route, Mount
-        from starlette.middleware import Middleware
-        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.routing import Route
 
         def _build_mcp_url(request, token):
             host = request.headers.get("host", f"localhost:{port}")
@@ -265,87 +263,62 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
                 "service": "superfinance",
             })
 
-        # --- Middleware to extract user token from /{token}/mcp paths ---
-        class UserTokenMiddleware(BaseHTTPMiddleware):
-            async def dispatch(self, request, call_next):
-                path = request.url.path
-                # Match /{token}/mcp or /{token}/mcp/...
-                parts = path.strip("/").split("/")
-                if len(parts) >= 2 and parts[1] == "mcp":
-                    token = parts[0]
-                    user = get_user(token)
-                    if user:
-                        tok = current_user_token.set(token)
-                        try:
-                            response = await call_next(request)
-                        finally:
-                            current_user_token.reset(tok)
-                        return response
-                    else:
-                        return JSONResponse(
-                            {"error": "Invalid token. Register at POST /register first."},
-                            status_code=401,
-                        )
-                return await call_next(request)
-
         # --- Build the app ---
         # Get the MCP ASGI app from FastMCP
         mcp_app = yfinance_server.http_app(path="/mcp")
 
-        # Create a wrapper that mounts MCP under /{token}/mcp
-        async def mcp_proxy(request: Request):
-            """Forward /{token}/mcp requests to the MCP app."""
-            # Strip the token prefix so the MCP app sees /mcp
-            token = request.path_params["token"]
-            scope = dict(request.scope)
-            original_path = scope["path"]
-            # Rewrite path: /{token}/mcp/... -> /mcp/...
-            scope["path"] = original_path[len(f"/{token}"):]
-            if not scope["path"]:
-                scope["path"] = "/"
+        # Non-MCP routes
+        routes_app = Starlette(routes=[
+            Route("/", signup_page),
+            Route("/signup", signup_handler, methods=["POST"]),
+            Route("/health", health_check),
+        ])
 
-            async def receive():
-                return await request._receive()
+        # ASGI middleware that rewrites /{token}/mcp -> /mcp and sets user context.
+        # Pure ASGI so streaming (SSE, streamable-http) works correctly.
+        class App:
+            async def __call__(self, scope, receive, send):
+                if scope["type"] in ("http", "websocket"):
+                    path = scope.get("path", "")
+                    parts = path.strip("/").split("/")
 
-            response_started = False
-            response_headers = None
-            body_parts = []
+                    # /{token}/mcp or /{token}/mcp/... -> rewrite to /mcp/...
+                    if len(parts) >= 2 and parts[1] == "mcp":
+                        token = parts[0]
+                        user = get_user(token)
+                        if not user:
+                            if scope["type"] == "http":
+                                response = JSONResponse(
+                                    {"error": "Invalid token"},
+                                    status_code=401,
+                                )
+                                await response(scope, receive, send)
+                                return
+                            return
 
-            async def send(message):
-                nonlocal response_started, response_headers
-                if message["type"] == "http.response.start":
-                    response_started = True
-                    response_headers = message
-                elif message["type"] == "http.response.body":
-                    body_parts.append(message.get("body", b""))
+                        # Rewrite path: strip the token prefix
+                        new_path = path[len(f"/{token}"):]
+                        scope = dict(scope, path=new_path or "/")
 
-            await mcp_app(scope, receive, send)
+                        tok = current_user_token.set(token)
+                        try:
+                            await mcp_app(scope, receive, send)
+                        finally:
+                            current_user_token.reset(tok)
+                        return
 
-            from starlette.responses import Response
-            if response_headers:
-                headers = dict(response_headers.get("headers", []))
-                return Response(
-                    content=b"".join(body_parts),
-                    status_code=response_headers.get("status", 200),
-                    headers={
-                        k.decode() if isinstance(k, bytes) else k:
-                        v.decode() if isinstance(v, bytes) else v
-                        for k, v in response_headers.get("headers", [])
-                    },
-                )
-            return Response(content=b"".join(body_parts))
+                    # /mcp -> pass to MCP app directly (admin/env-var usage)
+                    if path == "/mcp" or path.startswith("/mcp/"):
+                        await mcp_app(scope, receive, send)
+                        return
 
-        app = Starlette(
-            routes=[
-                Route("/", signup_page),
-                Route("/signup", signup_handler, methods=["POST"]),
-                Route("/health", health_check),
-                Route("/{token}/mcp", mcp_proxy, methods=["GET", "POST"]),
-                # Also mount the raw MCP app for admin/env-var usage
-                Mount("/mcp", app=mcp_app),
-            ],
-            middleware=[Middleware(UserTokenMiddleware)],
-        )
+                    # Everything else -> routes app (signup, health)
+                    await routes_app(scope, receive, send)
+                else:
+                    # lifespan etc
+                    await mcp_app(scope, receive, send)
+
+        app = App()
 
         print("Signup page: /")
         print("Per-user MCP: /{token}/mcp")
