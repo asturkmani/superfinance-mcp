@@ -178,10 +178,14 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
       result.className = "result success";
       result.innerHTML = (isNew
         ? "<strong>Account created!</strong>"
-        : "<strong>Welcome back!</strong> Here's your MCP link:")
+        : "<strong>Welcome back!</strong>") + " Here is your MCP link:"
         + '<div class="mcp-url" id="mcp-url">' + data.mcp_url + '</div>'
-        + '<button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById(\'mcp-url\').textContent)">Copy to clipboard</button>'
+        + '<button class="copy-btn" id="copy-btn">Copy to clipboard</button>'
         + '<p style="margin-top:12px;color:#888;font-size:13px;">Add this URL as a remote MCP server in Claude Desktop or claude.ai.</p>';
+      document.getElementById("copy-btn").addEventListener("click", function() {
+        navigator.clipboard.writeText(document.getElementById("mcp-url").textContent);
+        this.textContent = "Copied!";
+      });
     } else {
       result.className = "result error";
       result.textContent = data.error || "Something went wrong.";
