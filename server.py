@@ -240,10 +240,30 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
                     else getattr(data, 'user_secret', None)
                 )
             except Exception as e:
-                return JSONResponse(
-                    {"error": f"Registration failed: {e}"},
-                    status_code=400,
-                )
+                error_str = str(e)
+                # If user already exists in SnapTrade but not in our DB,
+                # delete and re-register to get a fresh secret
+                if "already exist" in error_str:
+                    try:
+                        client.authentication.delete_snap_trade_user(user_id=snaptrade_user_id)
+                        response = client.authentication.register_snap_trade_user(user_id=snaptrade_user_id)
+                        data = response.body if hasattr(response, 'body') else response
+                        if hasattr(data, 'to_dict'):
+                            data = data.to_dict()
+                        user_secret = (
+                            data.get("userSecret") if isinstance(data, dict)
+                            else getattr(data, 'user_secret', None)
+                        )
+                    except Exception as e2:
+                        return JSONResponse(
+                            {"error": f"Registration failed: {e2}"},
+                            status_code=400,
+                        )
+                else:
+                    return JSONResponse(
+                        {"error": f"Registration failed: {e}"},
+                        status_code=400,
+                    )
 
             if not user_secret:
                 return JSONResponse({"error": "No user_secret returned"}, status_code=500)
