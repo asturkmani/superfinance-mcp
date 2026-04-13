@@ -272,7 +272,9 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
 
         # --- Build the app ---
         # Get the MCP ASGI app from FastMCP
-        mcp_app = yfinance_server.http_app(path="/mcp")
+        # Use SSE transport for compatibility with Claude's remote MCP client
+        # SSE creates: GET /mcp (SSE stream) + POST /messages (message endpoint)
+        mcp_app = yfinance_server.http_app(path="/mcp", transport="sse")
 
         # Non-MCP routes
         routes_app = Starlette(routes=[
@@ -283,14 +285,15 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
 
         # ASGI middleware that rewrites /{token}/mcp -> /mcp and sets user context.
         # Pure ASGI so streaming (SSE, streamable-http) works correctly.
+        # SSE transport uses /mcp (GET, SSE stream) + /messages (POST, JSON-RPC)
         class App:
             async def __call__(self, scope, receive, send):
                 if scope["type"] in ("http", "websocket"):
                     path = scope.get("path", "")
                     parts = path.strip("/").split("/")
 
-                    # /{token}/mcp or /{token}/mcp/... -> rewrite to /mcp/...
-                    if len(parts) >= 2 and parts[1] == "mcp":
+                    # /{token}/mcp or /{token}/messages -> rewrite and set user context
+                    if len(parts) >= 2 and parts[1] in ("mcp", "messages"):
                         token = parts[0]
                         user = get_user(token)
                         if not user:
@@ -314,8 +317,8 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
                             current_user_token.reset(tok)
                         return
 
-                    # /mcp -> pass to MCP app directly (admin/env-var usage)
-                    if path == "/mcp" or path.startswith("/mcp/"):
+                    # /mcp or /messages -> pass to MCP app directly (admin/env-var usage)
+                    if path == "/mcp" or path.startswith("/mcp/") or path == "/messages" or path.startswith("/messages/"):
                         await mcp_app(scope, receive, send)
                         return
 
