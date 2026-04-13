@@ -196,6 +196,81 @@ class TestSnapTradeConnect:
         assert result["connection_url"].startswith("http")
 
 
+class TestSnapTradeCurrency:
+
+    def test_set_currency(self, tmp_data_dir):
+        token = users_mod.create_user("curr@test.com", "uid-c", "secret-c")
+        tok = users_mod.current_user_token.set(token)
+        try:
+            result = call_snaptrade(action="set_currency", currency="GBP")
+            assert result["success"] is True
+            assert result["base_currency"] == "GBP"
+            assert result["previous"] == "USD"
+
+            user = users_mod.get_user(token)
+            assert user["base_currency"] == "GBP"
+        finally:
+            users_mod.current_user_token.reset(tok)
+
+    def test_set_currency_invalid(self, tmp_data_dir):
+        token = users_mod.create_user("inv@test.com", "uid-i", "secret-i")
+        tok = users_mod.current_user_token.set(token)
+        try:
+            result = call_snaptrade(action="set_currency", currency="XX")
+            assert "error" in result
+        finally:
+            users_mod.current_user_token.reset(tok)
+
+    def test_set_currency_no_user_context(self):
+        result = call_snaptrade(action="set_currency", currency="EUR")
+        assert "error" in result
+
+
+@pytest.mark.skipif(not USER_ID or not USER_SECRET, reason="USER_ID and USER_SECRET required")
+class TestSnapTradeEnrichedHoldings:
+
+    @pytest.fixture(scope="class")
+    def first_account_id(self):
+        result = call_snaptrade(action="accounts")
+        if result.get("count", 0) == 0:
+            pytest.skip("No accounts connected")
+        return result["accounts"][0]["account_id"]
+
+    def test_holdings_have_enriched_fields(self, first_account_id):
+        result = call_snaptrade(action="holdings", account_id=first_account_id)
+        assert result["success"] is True
+        assert "base_currency" in result
+        assert "total_value_base" in result
+        assert isinstance(result["total_value_base"], (int, float))
+        assert "cash_balances" in result
+
+        if len(result["positions"]) > 0:
+            pos = result["positions"][0]
+            assert "value" in pos
+            assert "value_base" in pos
+            assert "currency" in pos
+
+
+@pytest.mark.skipif(not USER_ID or not USER_SECRET, reason="USER_ID and USER_SECRET required")
+class TestSnapTradePortfolio:
+
+    def test_portfolio_returns_all_accounts(self):
+        result = call_snaptrade(action="portfolio")
+        assert result["success"] is True
+        assert "base_currency" in result
+        assert "grand_total_base" in result
+        assert isinstance(result["accounts"], list)
+        assert len(result["accounts"]) > 0
+
+        acct = result["accounts"][0]
+        assert "account" in acct
+        assert "positions" in acct
+        assert "cash_balances" in acct
+        assert "total_value_base" in acct
+        assert "positions_value_base" in acct
+        assert "cash_value_base" in acct
+
+
 class TestSnapTradeErrorCases:
 
     def test_missing_credentials_no_env(self):

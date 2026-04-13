@@ -2,11 +2,13 @@
 
 import json
 import os
+import re
 from typing import Optional
 
+import yfinance as yf
 from snaptrade_client import SnapTrade
 
-from users import current_user_token, get_user
+from users import current_user_token, get_user, update_user
 
 
 _snaptrade_client = None
@@ -34,18 +36,232 @@ def _resolve_credentials(user_id: Optional[str], user_secret: Optional[str]):
     if user_id and user_secret:
         return user_id, user_secret
 
-    # Try the per-user token set by middleware
     token = current_user_token.get()
     if token:
         user_data = get_user(token)
         if user_data:
             return user_data["snaptrade_user_id"], user_data["snaptrade_user_secret"]
 
-    # Fall back to env vars
     return (
         user_id or os.getenv("SNAPTRADE_USER_ID"),
         user_secret or os.getenv("SNAPTRADE_USER_SECRET"),
     )
+
+
+def _get_base_currency() -> str:
+    """Get the current user's base currency preference."""
+    token = current_user_token.get()
+    if token:
+        user_data = get_user(token)
+        if user_data:
+            return user_data.get("base_currency", "USD")
+    return os.getenv("BASE_CURRENCY", "USD")
+
+
+def _enrich_positions(positions: list, base_currency: str) -> tuple[list, float]:
+    """Replace SnapTrade prices with live Yahoo Finance prices and convert to base currency.
+
+    Returns (enriched_positions, total_value_base).
+    """
+    if not positions:
+        return [], 0.0
+
+    # Collect unique symbols and currencies
+    symbols = set()
+    currencies_needed = set()
+    for pos in positions:
+        sym = pos.get("symbol")
+        if sym:
+            symbols.add(sym)
+        ccy = pos.get("currency")
+        if ccy and ccy != base_currency:
+            currencies_needed.add(ccy)
+
+    # Batch-fetch live prices
+    live_prices = {}
+    if symbols:
+        try:
+            tickers = yf.Tickers(" ".join(symbols))
+            for sym in symbols:
+                try:
+                    info = tickers.tickers[sym].info
+                    price = info.get("regularMarketPrice") or info.get("previousClose")
+                    if price:
+                        live_prices[sym] = float(price)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # Batch-fetch FX rates
+    fx_rates = {}
+    if currencies_needed:
+        fx_tickers_str = " ".join(f"{ccy}{base_currency}=X" for ccy in currencies_needed)
+        try:
+            fx_data = yf.Tickers(fx_tickers_str)
+            for ccy in currencies_needed:
+                try:
+                    pair = f"{ccy}{base_currency}=X"
+                    info = fx_data.tickers[pair].info
+                    rate = info.get("regularMarketPrice") or info.get("previousClose")
+                    if rate:
+                        fx_rates[ccy] = float(rate)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # Enrich each position
+    enriched = []
+    total_base = 0.0
+    for pos in positions:
+        sym = pos.get("symbol")
+        units = pos.get("units") or 0
+        ccy = pos.get("currency") or base_currency
+
+        price = live_prices.get(sym) or pos.get("price") or 0
+        value = round(units * price, 2)
+
+        fx_rate = fx_rates.get(ccy, 1.0) if ccy != base_currency else 1.0
+        value_base = round(value * fx_rate, 2)
+        total_base += value_base
+
+        enriched.append({
+            "symbol": sym,
+            "description": pos.get("description"),
+            "units": units,
+            "price": price,
+            "value": value,
+            "value_base": value_base,
+            "currency": ccy,
+            "fx_rate": fx_rate if ccy != base_currency else None,
+            "open_pnl": pos.get("open_pnl"),
+        })
+
+    return enriched, round(total_base, 2)
+
+
+def _safe_get(obj, key, default=None):
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _to_dict(obj):
+    if hasattr(obj, 'to_dict'):
+        return obj.to_dict()
+    if hasattr(obj, '__dict__') and not isinstance(obj, dict):
+        return vars(obj)
+    return obj
+
+
+def _extract_holdings_for_account(client, account_id, user_id, user_secret, base_currency):
+    """Fetch holdings + cash balances for a single account. Returns dict."""
+    response = client.account_information.get_user_holdings(
+        account_id=account_id,
+        user_id=user_id,
+        user_secret=user_secret
+    )
+    holdings = response.body if hasattr(response, 'body') else response
+    if hasattr(holdings, 'to_dict'):
+        holdings = holdings.to_dict()
+
+    account_data = _safe_get(holdings, "account", {})
+    if hasattr(account_data, 'to_dict'):
+        account_data = account_data.to_dict()
+
+    # Extract positions
+    raw_positions = []
+    positions = _safe_get(holdings, "positions", [])
+    for position in positions:
+        position = _to_dict(position)
+
+        sym_outer = _to_dict(_safe_get(position, "symbol", {}))
+        sym_inner = _to_dict(_safe_get(sym_outer, "symbol", {}))
+
+        ticker = _safe_get(sym_inner, "symbol") if isinstance(sym_inner, dict) else sym_inner
+        description = _safe_get(sym_inner, "description") if isinstance(sym_inner, dict) else None
+
+        pos_ccy = _to_dict(_safe_get(position, "currency", {}))
+        ccy_code = _safe_get(pos_ccy, "code") if isinstance(pos_ccy, dict) else None
+
+        if not ccy_code:
+            sym_ccy = _to_dict(_safe_get(sym_inner, "currency", {})) if isinstance(sym_inner, dict) else {}
+            ccy_code = _safe_get(sym_ccy, "code") if isinstance(sym_ccy, dict) else None
+
+        raw_positions.append({
+            "symbol": ticker,
+            "description": description,
+            "units": _safe_get(position, "units"),
+            "price": _safe_get(position, "price"),
+            "open_pnl": _safe_get(position, "open_pnl"),
+            "currency": ccy_code,
+        })
+
+    # Extract cash balances
+    cash_balances = []
+    balances = _safe_get(holdings, "balances", [])
+    for bal in balances:
+        bal = _to_dict(bal)
+        bal_ccy = _to_dict(_safe_get(bal, "currency", {}))
+        cash_balances.append({
+            "currency": _safe_get(bal_ccy, "code") if isinstance(bal_ccy, dict) else None,
+            "cash": _safe_get(bal, "cash"),
+            "buying_power": _safe_get(bal, "buying_power"),
+        })
+
+    # Enrich positions with live prices
+    enriched, positions_total = _enrich_positions(raw_positions, base_currency)
+
+    # Convert cash to base currency
+    cash_currencies = set()
+    for cb in cash_balances:
+        ccy = cb.get("currency")
+        if ccy and ccy != base_currency:
+            cash_currencies.add(ccy)
+
+    cash_fx = {}
+    if cash_currencies:
+        fx_str = " ".join(f"{c}{base_currency}=X" for c in cash_currencies)
+        try:
+            fx_data = yf.Tickers(fx_str)
+            for c in cash_currencies:
+                try:
+                    pair = f"{c}{base_currency}=X"
+                    info = fx_data.tickers[pair].info
+                    rate = info.get("regularMarketPrice") or info.get("previousClose")
+                    if rate:
+                        cash_fx[c] = float(rate)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    cash_total_base = 0.0
+    for cb in cash_balances:
+        cash = cb.get("cash") or 0
+        ccy = cb.get("currency") or base_currency
+        fx_rate = cash_fx.get(ccy, 1.0) if ccy != base_currency else 1.0
+        cb["cash_base"] = round(cash * fx_rate, 2)
+        cb["fx_rate"] = fx_rate if ccy != base_currency else None
+        cash_total_base += cb["cash_base"]
+
+    cash_total_base = round(cash_total_base, 2)
+    account_total_base = round(positions_total + cash_total_base, 2)
+
+    return {
+        "account": {
+            "id": _safe_get(account_data, "id"),
+            "name": _safe_get(account_data, "name"),
+            "number": _safe_get(account_data, "number"),
+            "institution": _safe_get(account_data, "institution_name"),
+        },
+        "positions": enriched,
+        "cash_balances": cash_balances,
+        "positions_value_base": positions_total,
+        "cash_value_base": cash_total_base,
+        "total_value_base": account_total_base,
+    }
 
 
 def register_snaptrade_v2(server):
@@ -55,7 +271,8 @@ def register_snaptrade_v2(server):
     def snaptrade(
         action: str,
         account_id: Optional[str] = None,
-        account_name: Optional[str] = None
+        account_name: Optional[str] = None,
+        currency: Optional[str] = None
     ) -> str:
         """
         Manage brokerage accounts via SnapTrade.
@@ -63,15 +280,18 @@ def register_snaptrade_v2(server):
         Actions:
         - connect: Get URL to connect a brokerage account
         - accounts: List connected brokerage accounts
-        - holdings: Get holdings for a specific account
+        - portfolio: Get all holdings and cash across ALL accounts (live prices)
+        - holdings: Get holdings for a specific account (live prices from Yahoo Finance)
         - disconnect: Remove a brokerage connection (by account_id or account_name)
+        - set_currency: Set your base currency for portfolio valuation (e.g. "GBP")
 
         Your credentials are automatically loaded from your user profile.
 
         Args:
-            action: Action to perform (connect|accounts|holdings|disconnect)
+            action: Action to perform (connect|accounts|portfolio|holdings|disconnect|set_currency)
             account_id: Account ID (required for holdings, optional for disconnect)
             account_name: Account or institution name to disconnect (e.g. "Trading212")
+            currency: Base currency code for set_currency action (e.g. "GBP", "USD", "EUR")
 
         Returns:
             JSON with results
@@ -79,8 +299,10 @@ def register_snaptrade_v2(server):
         Examples:
             snaptrade(action="connect")
             snaptrade(action="accounts")
+            snaptrade(action="portfolio")
             snaptrade(action="holdings", account_id="abc-123")
             snaptrade(action="disconnect", account_name="Trading212")
+            snaptrade(action="set_currency", currency="GBP")
         """
         try:
             client = get_snaptrade_client()
@@ -150,6 +372,39 @@ def register_snaptrade_v2(server):
                     "accounts": formatted
                 }, indent=2)
 
+            elif action == "portfolio":
+                if not user_id or not user_secret:
+                    return json.dumps({"error": "Credentials required"}, indent=2)
+
+                base_ccy = _get_base_currency()
+
+                # List all accounts
+                response = client.account_information.list_user_accounts(
+                    user_id=user_id,
+                    user_secret=user_secret
+                )
+                accounts = response.body if hasattr(response, 'body') else response
+
+                account_results = []
+                grand_total = 0.0
+                for acct in accounts:
+                    acct = _to_dict(acct)
+                    aid = acct.get("id")
+                    if not aid:
+                        continue
+                    acct_data = _extract_holdings_for_account(
+                        client, aid, user_id, user_secret, base_ccy
+                    )
+                    account_results.append(acct_data)
+                    grand_total += acct_data["total_value_base"]
+
+                return json.dumps({
+                    "success": True,
+                    "base_currency": base_ccy,
+                    "accounts": account_results,
+                    "grand_total_base": round(grand_total, 2),
+                }, indent=2)
+
             elif action == "holdings":
                 if not account_id:
                     return json.dumps({
@@ -158,56 +413,12 @@ def register_snaptrade_v2(server):
                 if not user_id or not user_secret:
                     return json.dumps({"error": "Credentials required"}, indent=2)
 
-                response = client.account_information.get_user_holdings(
-                    account_id=account_id,
-                    user_id=user_id,
-                    user_secret=user_secret
+                base_ccy = _get_base_currency()
+                result = _extract_holdings_for_account(
+                    client, account_id, user_id, user_secret, base_ccy
                 )
-                holdings = response.body if hasattr(response, 'body') else response
-                if hasattr(holdings, 'to_dict'):
-                    holdings = holdings.to_dict()
-
-                def safe_get(obj, key, default=None):
-                    if isinstance(obj, dict):
-                        return obj.get(key, default)
-                    return getattr(obj, key, default)
-
-                account_data = safe_get(holdings, "account", {})
-                if hasattr(account_data, 'to_dict'):
-                    account_data = account_data.to_dict()
-
-                result = {
-                    "success": True,
-                    "account": {
-                        "id": safe_get(account_data, "id"),
-                        "name": safe_get(account_data, "name"),
-                        "number": safe_get(account_data, "number"),
-                        "institution": safe_get(account_data, "institution_name")
-                    },
-                    "positions": []
-                }
-
-                positions = safe_get(holdings, "positions", [])
-                for position in positions:
-                    if hasattr(position, 'to_dict'):
-                        position = position.to_dict()
-                    symbol = safe_get(position, "symbol", {})
-                    if hasattr(symbol, 'to_dict'):
-                        symbol = symbol.to_dict()
-                    currency = safe_get(symbol, "currency", {})
-                    if hasattr(currency, 'to_dict'):
-                        currency = currency.to_dict()
-
-                    result["positions"].append({
-                        "symbol": safe_get(symbol, "symbol"),
-                        "description": safe_get(symbol, "description"),
-                        "units": safe_get(position, "units"),
-                        "price": safe_get(position, "price"),
-                        "open_pnl": safe_get(position, "open_pnl"),
-                        "currency": safe_get(currency, "code") if currency else None
-                    })
-
-                result["total_value"] = safe_get(holdings, "total_value")
+                result["success"] = True
+                result["base_currency"] = base_ccy
 
                 return json.dumps(result, indent=2)
 
@@ -219,7 +430,6 @@ def register_snaptrade_v2(server):
                         "error": "Provide account_id or account_name to disconnect"
                     }, indent=2)
 
-                # List accounts to find the brokerage_authorization ID
                 response = client.account_information.list_user_accounts(
                     user_id=user_id,
                     user_secret=user_secret
@@ -271,10 +481,31 @@ def register_snaptrade_v2(server):
                     "message": "Brokerage account disconnected successfully"
                 }, indent=2)
 
+            elif action == "set_currency":
+                code = (currency or "").strip().upper()
+                if not re.match(r"^[A-Z]{3}$", code):
+                    return json.dumps({
+                        "error": "Invalid currency code. Use 3-letter ISO code (e.g. USD, GBP, EUR)"
+                    }, indent=2)
+
+                token = current_user_token.get()
+                if not token:
+                    return json.dumps({"error": "User context required"}, indent=2)
+
+                old = _get_base_currency()
+                update_user(token, {"base_currency": code})
+
+                return json.dumps({
+                    "success": True,
+                    "previous": old,
+                    "base_currency": code,
+                    "message": f"Base currency changed from {old} to {code}"
+                }, indent=2)
+
             else:
                 return json.dumps({
                     "error": f"Invalid action: {action}",
-                    "valid_actions": ["connect", "accounts", "holdings", "disconnect"]
+                    "valid_actions": ["connect", "accounts", "portfolio", "holdings", "disconnect", "set_currency"]
                 }, indent=2)
 
         except Exception as e:

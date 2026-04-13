@@ -40,6 +40,7 @@ def create_user(email: str, snaptrade_user_id: str, snaptrade_user_secret: str) 
         "email": email,
         "snaptrade_user_id": snaptrade_user_id,
         "snaptrade_user_secret": snaptrade_user_secret,
+        "base_currency": "USD",
     }
     save_users(users)
     return token
@@ -48,6 +49,14 @@ def create_user(email: str, snaptrade_user_id: str, snaptrade_user_secret: str) 
 def get_user(token: str) -> Optional[dict]:
     """Look up a user by token. Returns their credential dict or None."""
     return load_users().get(token)
+
+
+def update_user(token: str, updates: dict):
+    """Patch fields on an existing user record."""
+    users = load_users()
+    if token in users:
+        users[token].update(updates)
+        save_users(users)
 
 
 def get_user_by_email(email: str) -> Optional[tuple[str, dict]]:

@@ -71,7 +71,10 @@ options(action="analyze", ticker="AAPL")
 Actions:
 - **connect**: Get URL to connect a brokerage account
 - **accounts**: List connected brokerage accounts
+- **portfolio**: Get all holdings and cash across ALL accounts (live prices)
 - **holdings**: Get holdings for a specific account
+- **disconnect**: Remove a brokerage connection
+- **set_currency**: Set your base currency (e.g. "GBP")
 
 Your SnapTrade credentials are automatically loaded from your user profile.
 
@@ -79,7 +82,9 @@ Examples:
 ```
 snaptrade(action="connect")
 snaptrade(action="accounts")
+snaptrade(action="portfolio")
 snaptrade(action="holdings", account_id="abc-123")
+snaptrade(action="set_currency", currency="GBP")
 ```
 """,
 )
