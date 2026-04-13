@@ -54,7 +54,8 @@ def register_snaptrade_v2(server):
     @server.tool()
     def snaptrade(
         action: str,
-        account_id: Optional[str] = None
+        account_id: Optional[str] = None,
+        account_name: Optional[str] = None
     ) -> str:
         """
         Manage brokerage accounts via SnapTrade.
@@ -63,12 +64,14 @@ def register_snaptrade_v2(server):
         - connect: Get URL to connect a brokerage account
         - accounts: List connected brokerage accounts
         - holdings: Get holdings for a specific account
+        - disconnect: Remove a brokerage connection (by account_id or account_name)
 
         Your credentials are automatically loaded from your user profile.
 
         Args:
-            action: Action to perform (connect|accounts|holdings)
-            account_id: Account ID (required for holdings action)
+            action: Action to perform (connect|accounts|holdings|disconnect)
+            account_id: Account ID (required for holdings, optional for disconnect)
+            account_name: Account or institution name to disconnect (e.g. "Trading212")
 
         Returns:
             JSON with results
@@ -77,6 +80,7 @@ def register_snaptrade_v2(server):
             snaptrade(action="connect")
             snaptrade(action="accounts")
             snaptrade(action="holdings", account_id="abc-123")
+            snaptrade(action="disconnect", account_name="Trading212")
         """
         try:
             client = get_snaptrade_client()
@@ -133,6 +137,7 @@ def register_snaptrade_v2(server):
 
                     formatted.append({
                         "account_id": account.get("id"),
+                        "brokerage_authorization": account.get("brokerage_authorization"),
                         "name": account.get("name"),
                         "number": account.get("number"),
                         "institution": account.get("institution_name"),
@@ -206,10 +211,70 @@ def register_snaptrade_v2(server):
 
                 return json.dumps(result, indent=2)
 
+            elif action == "disconnect":
+                if not user_id or not user_secret:
+                    return json.dumps({"error": "Credentials required"}, indent=2)
+                if not account_id and not account_name:
+                    return json.dumps({
+                        "error": "Provide account_id or account_name to disconnect"
+                    }, indent=2)
+
+                # List accounts to find the brokerage_authorization ID
+                response = client.account_information.list_user_accounts(
+                    user_id=user_id,
+                    user_secret=user_secret
+                )
+                accounts = response.body if hasattr(response, 'body') else response
+
+                target = None
+                for acct in accounts:
+                    if hasattr(acct, 'to_dict'):
+                        acct = acct.to_dict()
+                    elif hasattr(acct, '__dict__'):
+                        acct = vars(acct)
+
+                    if account_id and acct.get("id") == account_id:
+                        target = acct
+                        break
+                    if account_name:
+                        name_lower = account_name.lower()
+                        if (name_lower in (acct.get("name") or "").lower()
+                                or name_lower in (acct.get("institution_name") or "").lower()):
+                            target = acct
+                            break
+
+                if not target:
+                    return json.dumps({
+                        "error": f"No account found matching: {account_name or account_id}",
+                        "hint": "Use snaptrade(action='accounts') to see your connected accounts"
+                    }, indent=2)
+
+                auth_id = target.get("brokerage_authorization")
+                if not auth_id:
+                    return json.dumps({
+                        "error": "No brokerage_authorization found for this account"
+                    }, indent=2)
+
+                client.connections.remove_brokerage_authorization(
+                    authorization_id=auth_id,
+                    user_id=user_id,
+                    user_secret=user_secret
+                )
+
+                return json.dumps({
+                    "success": True,
+                    "disconnected": {
+                        "name": target.get("name"),
+                        "institution": target.get("institution_name"),
+                        "account_id": target.get("id"),
+                    },
+                    "message": "Brokerage account disconnected successfully"
+                }, indent=2)
+
             else:
                 return json.dumps({
                     "error": f"Invalid action: {action}",
-                    "valid_actions": ["connect", "accounts", "holdings"]
+                    "valid_actions": ["connect", "accounts", "holdings", "disconnect"]
                 }, indent=2)
 
         except Exception as e:
