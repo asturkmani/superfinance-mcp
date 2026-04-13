@@ -39,22 +39,22 @@ def _reset_snaptrade_client():
 
 
 def _make_tool():
-    """Create a callable snaptrade tool backed by a real FastMCP server."""
+    """Create a callable portfolio tool backed by a real FastMCP server."""
     server = FastMCP("test")
     register_snaptrade_v2(server)
     tool_fn = None
     for tool in server._tool_manager._tools.values():
-        if tool.name == "snaptrade":
+        if tool.name == "portfolio":
             tool_fn = tool.fn
             break
-    assert tool_fn is not None, "snaptrade tool not found in server"
+    assert tool_fn is not None, "portfolio tool not found in server"
     return tool_fn
 
 
 _tool_fn = _make_tool()
 
 
-def call_snaptrade(**kwargs) -> dict:
+def call_tool(**kwargs) -> dict:
     return json.loads(_tool_fn(**kwargs))
 
 
@@ -141,7 +141,7 @@ class TestCredentialResolution:
 class TestSnapTradeAccounts:
 
     def test_list_accounts(self):
-        result = call_snaptrade(action="accounts")
+        result = call_tool(action="accounts")
 
         assert result["success"] is True
         assert isinstance(result["accounts"], list)
@@ -159,13 +159,13 @@ class TestSnapTradeHoldings:
 
     @pytest.fixture(scope="class")
     def first_account_id(self):
-        result = call_snaptrade(action="accounts")
+        result = call_tool(action="accounts")
         if result.get("count", 0) == 0:
             pytest.skip("No accounts connected")
         return result["accounts"][0]["account_id"]
 
     def test_get_holdings(self, first_account_id):
-        result = call_snaptrade(action="holdings", account_id=first_account_id)
+        result = call_tool(action="holdings", account_id=first_account_id)
 
         assert result["success"] is True
         assert "account" in result
@@ -180,7 +180,7 @@ class TestSnapTradeHoldings:
             assert "current_price" in pos
 
     def test_holdings_missing_account_id(self):
-        result = call_snaptrade(action="holdings")
+        result = call_tool(action="holdings")
         assert "error" in result
         assert "account_id" in result["error"].lower()
 
@@ -189,7 +189,7 @@ class TestSnapTradeHoldings:
 class TestSnapTradeConnect:
 
     def test_get_connect_url(self):
-        result = call_snaptrade(action="connect")
+        result = call_tool(action="connect")
 
         assert result["success"] is True
         assert result["connection_url"] is not None
@@ -202,7 +202,7 @@ class TestSnapTradeCurrency:
         token = users_mod.create_user("curr@test.com", "uid-c", "secret-c")
         tok = users_mod.current_user_token.set(token)
         try:
-            result = call_snaptrade(action="set_currency", currency="GBP")
+            result = call_tool(action="set_currency", currency="GBP")
             assert result["success"] is True
             assert result["base_currency"] == "GBP"
             assert result["previous"] == "USD"
@@ -216,13 +216,13 @@ class TestSnapTradeCurrency:
         token = users_mod.create_user("inv@test.com", "uid-i", "secret-i")
         tok = users_mod.current_user_token.set(token)
         try:
-            result = call_snaptrade(action="set_currency", currency="XX")
+            result = call_tool(action="set_currency", currency="XX")
             assert "error" in result
         finally:
             users_mod.current_user_token.reset(tok)
 
     def test_set_currency_no_user_context(self):
-        result = call_snaptrade(action="set_currency", currency="EUR")
+        result = call_tool(action="set_currency", currency="EUR")
         assert "error" in result
 
 
@@ -231,13 +231,13 @@ class TestSnapTradeEnrichedHoldings:
 
     @pytest.fixture(scope="class")
     def first_account_id(self):
-        result = call_snaptrade(action="accounts")
+        result = call_tool(action="accounts")
         if result.get("count", 0) == 0:
             pytest.skip("No accounts connected")
         return result["accounts"][0]["account_id"]
 
     def test_holdings_have_enriched_fields(self, first_account_id):
-        result = call_snaptrade(action="holdings", account_id=first_account_id)
+        result = call_tool(action="holdings", account_id=first_account_id)
         assert result["success"] is True
         assert "base_currency" in result
         assert "total_value_base" in result
@@ -257,7 +257,7 @@ class TestSnapTradeEnrichedHoldings:
 class TestSnapTradePortfolio:
 
     def test_portfolio_returns_all_accounts(self):
-        result = call_snaptrade(action="portfolio")
+        result = call_tool(action="overview")
         assert result["success"] is True
         assert "base_currency" in result
         assert "grand_total_base" in result
@@ -279,10 +279,122 @@ class TestSnapTradeErrorCases:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("SNAPTRADE_USER_ID", None)
             os.environ.pop("SNAPTRADE_USER_SECRET", None)
-            result = call_snaptrade(action="accounts")
+            result = call_tool(action="accounts")
         assert "error" in result
 
     def test_invalid_action(self):
-        result = call_snaptrade(action="invalid_action")
+        result = call_tool(action="invalid_action")
         assert "error" in result
         assert "valid_actions" in result
+
+
+# ---------------------------------------------------------------------------
+# Manual holdings tests
+# ---------------------------------------------------------------------------
+
+class TestManualHoldings:
+
+    def test_add_holding_trackable(self, tmp_data_dir):
+        token = users_mod.create_user("h@test.com", "uid-h", "secret-h")
+        tok = users_mod.current_user_token.set(token)
+        try:
+            result = call_tool(
+                action="add_holding", description="Pension VOO",
+                symbol="VOO", units=500, currency="USD", cost_price=420,
+            )
+            assert result["success"] is True
+            h = result["holding"]
+            assert h["symbol"] == "VOO"
+            assert h["units"] == 500
+            assert h["cost_price"] == 420
+            assert h["account_name"] == "Manual"
+            assert len(h["id"]) == 8
+
+            user = users_mod.get_user(token)
+            assert len(user["manual_holdings"]) == 1
+        finally:
+            users_mod.current_user_token.reset(tok)
+
+    def test_add_holding_fixed_value(self, tmp_data_dir):
+        token = users_mod.create_user("f@test.com", "uid-f", "secret-f")
+        tok = users_mod.current_user_token.set(token)
+        try:
+            result = call_tool(
+                action="add_holding", description="Loan to Mobility Giant",
+                units=1, currency="GBP", manual_price=25000,
+                account_name="Private",
+            )
+            assert result["success"] is True
+            h = result["holding"]
+            assert h["symbol"] is None
+            assert h["manual_price"] == 25000
+            assert h["account_name"] == "Private"
+        finally:
+            users_mod.current_user_token.reset(tok)
+
+    def test_add_holding_missing_fields(self, tmp_data_dir):
+        token = users_mod.create_user("m@test.com", "uid-m", "secret-m")
+        tok = users_mod.current_user_token.set(token)
+        try:
+            result = call_tool(action="add_holding", description="X")
+            assert "error" in result
+        finally:
+            users_mod.current_user_token.reset(tok)
+
+    def test_update_holding(self, tmp_data_dir):
+        token = users_mod.create_user("u@test.com", "uid-u", "secret-u")
+        tok = users_mod.current_user_token.set(token)
+        try:
+            add_result = call_tool(
+                action="add_holding", description="Test",
+                units=10, currency="USD", manual_price=100,
+            )
+            hid = add_result["holding"]["id"]
+
+            result = call_tool(action="update_holding", id=hid, units=20, manual_price=150)
+            assert result["success"] is True
+            assert result["holding"]["units"] == 20
+            assert result["holding"]["manual_price"] == 150
+        finally:
+            users_mod.current_user_token.reset(tok)
+
+    def test_remove_holding(self, tmp_data_dir):
+        token = users_mod.create_user("r@test.com", "uid-r", "secret-r")
+        tok = users_mod.current_user_token.set(token)
+        try:
+            add_result = call_tool(
+                action="add_holding", description="To Remove",
+                units=1, currency="USD", manual_price=50,
+            )
+            hid = add_result["holding"]["id"]
+
+            result = call_tool(action="remove_holding", id=hid)
+            assert result["success"] is True
+
+            user = users_mod.get_user(token)
+            assert len(user.get("manual_holdings", [])) == 0
+        finally:
+            users_mod.current_user_token.reset(tok)
+
+    def test_remove_nonexistent(self, tmp_data_dir):
+        token = users_mod.create_user("n@test.com", "uid-n", "secret-n")
+        tok = users_mod.current_user_token.set(token)
+        try:
+            result = call_tool(action="remove_holding", id="nonexistent")
+            assert "error" in result
+        finally:
+            users_mod.current_user_token.reset(tok)
+
+    def test_list_holdings_empty(self, tmp_data_dir):
+        token = users_mod.create_user("e@test.com", "uid-e", "secret-e")
+        tok = users_mod.current_user_token.set(token)
+        try:
+            result = call_tool(action="list_holdings")
+            assert result["success"] is True
+            assert result["count"] == 0
+        finally:
+            users_mod.current_user_token.reset(tok)
+
+    def test_no_user_context(self):
+        result = call_tool(action="add_holding", description="X", units=1, currency="USD")
+        assert "error" in result

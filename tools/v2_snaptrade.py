@@ -367,61 +367,83 @@ def _extract_holdings_for_account(client, account_id, user_id, user_secret, base
 
 
 def register_snaptrade_v2(server):
-    """Register simplified SnapTrade tool."""
+    """Register the unified portfolio tool."""
 
     @server.tool()
-    def snaptrade(
+    def portfolio(
         action: str,
         account_id: Optional[str] = None,
         account_name: Optional[str] = None,
-        currency: Optional[str] = None
+        currency: Optional[str] = None,
+        # Manual holding fields
+        id: Optional[str] = None,
+        symbol: Optional[str] = None,
+        description: Optional[str] = None,
+        units: Optional[float] = None,
+        cost_price: Optional[float] = None,
+        manual_price: Optional[float] = None,
     ) -> str:
         """
-        Manage brokerage accounts via SnapTrade.
+        Unified portfolio management — brokerage accounts (SnapTrade) and manual/private holdings.
 
-        IMPORTANT: Use "portfolio" as the default action when the user asks about their
-        holdings, positions, or portfolio. Only use "holdings" if they specifically want
-        a single account.
+        IMPORTANT: Use "overview" as the default action when the user asks about their
+        holdings, positions, or portfolio.
 
-        Actions:
-        - portfolio: Get ALL holdings (stocks + options + cash) across ALL accounts with live prices. USE THIS BY DEFAULT.
-        - holdings: Get holdings for a single specific account only
+        Brokerage actions:
+        - overview: Get ALL holdings (stocks + options + cash + manual) across ALL accounts with live prices. USE THIS BY DEFAULT.
+        - holdings: Get holdings for a single specific brokerage account only
         - connect: Get URL to connect a brokerage account
         - accounts: List connected brokerage accounts
         - disconnect: Remove a brokerage connection (by account_id or account_name)
         - set_currency: Set your base currency for portfolio valuation (e.g. "GBP")
 
-        Portfolio and holdings return stock positions, option positions, and cash balances
-        separately, each with values converted to the user's base currency.
+        Manual holding actions:
+        - add_holding: Add a private/manual holding. Requires: description, units, currency. Optional: symbol (for Yahoo price tracking), cost_price, manual_price, account_name.
+        - update_holding: Update a manual holding by id. Pass any fields to change.
+        - remove_holding: Remove a manual holding by id.
+        - list_holdings: List all manual holdings with live prices where available.
 
-        Your credentials are automatically loaded from your user profile.
+        For trackable holdings (e.g. VOO in a pension), set symbol and live Yahoo prices are fetched automatically.
+        For non-trackable holdings (e.g. private equity, loans), omit symbol and set manual_price.
 
         Args:
-            action: Action to perform (portfolio|holdings|connect|accounts|disconnect|set_currency)
-            account_id: Account ID (required for holdings, optional for disconnect)
-            account_name: Account or institution name to disconnect (e.g. "Trading212")
-            currency: Base currency code for set_currency action (e.g. "GBP", "USD", "EUR")
-
-        Returns:
-            JSON with results
+            action: Action to perform
+            account_id: Account ID (for holdings/disconnect)
+            account_name: Account or institution name (for disconnect, or grouping label for add_holding — defaults to "Manual")
+            currency: Currency code (for set_currency or add_holding, e.g. "GBP")
+            id: Holding ID (for update_holding/remove_holding)
+            symbol: Yahoo Finance ticker (for add_holding/update_holding, e.g. "VOO")
+            description: Human-readable label (for add_holding/update_holding, e.g. "Pension VOO", "Loan to X")
+            units: Number of units (for add_holding/update_holding)
+            cost_price: Average cost per unit (for add_holding/update_holding)
+            manual_price: Manual price override, used when no symbol or Yahoo fails (for add_holding/update_holding)
 
         Examples:
-            snaptrade(action="portfolio")
-            snaptrade(action="holdings", account_id="abc-123")
-            snaptrade(action="connect")
-            snaptrade(action="accounts")
-            snaptrade(action="disconnect", account_name="Trading212")
-            snaptrade(action="set_currency", currency="GBP")
+            portfolio(action="overview")
+            portfolio(action="holdings", account_id="abc-123")
+            portfolio(action="connect")
+            portfolio(action="add_holding", description="Pension VOO", symbol="VOO", units=500, currency="USD", cost_price=420)
+            portfolio(action="add_holding", description="Loan to Mobility Giant", units=1, currency="GBP", manual_price=25000)
+            portfolio(action="list_holdings")
+            portfolio(action="update_holding", id="a1b2c3d4", units=600)
+            portfolio(action="remove_holding", id="a1b2c3d4")
+            portfolio(action="set_currency", currency="GBP")
         """
         try:
-            client = get_snaptrade_client()
-            if not client:
-                return json.dumps({
-                    "error": "SnapTrade not configured",
-                    "message": "Set SNAPTRADE_CONSUMER_KEY and SNAPTRADE_CLIENT_ID environment variables"
-                }, indent=2)
+            # Manual holding actions don't need SnapTrade
+            MANUAL_ACTIONS = {"add_holding", "update_holding", "remove_holding", "list_holdings"}
+            BROKERAGE_ACTIONS = {"overview", "holdings", "connect", "accounts", "disconnect", "set_currency"}
 
-            user_id, user_secret = _resolve_credentials(None, None)
+            client = None
+            user_id = user_secret = None
+            if action in BROKERAGE_ACTIONS:
+                client = get_snaptrade_client()
+                if not client:
+                    return json.dumps({
+                        "error": "SnapTrade not configured",
+                        "message": "Set SNAPTRADE_CONSUMER_KEY and SNAPTRADE_CLIENT_ID environment variables"
+                    }, indent=2)
+                user_id, user_secret = _resolve_credentials(None, None)
 
             if action == "connect":
                 if not user_id or not user_secret:
@@ -481,7 +503,7 @@ def register_snaptrade_v2(server):
                     "accounts": formatted
                 }, indent=2)
 
-            elif action == "portfolio":
+            elif action == "overview":
                 if not user_id or not user_secret:
                     return json.dumps({"error": "Credentials required"}, indent=2)
 
@@ -507,12 +529,44 @@ def register_snaptrade_v2(server):
                     account_results.append(acct_data)
                     grand_total += acct_data["total_value_base"]
 
-                return json.dumps({
+                # Include manual holdings in portfolio
+                manual_section = None
+                token = current_user_token.get()
+                user_data = get_user(token) if token else None
+                manual_list = user_data.get("manual_holdings", []) if user_data else []
+                if manual_list:
+                    positions = []
+                    for h in manual_list:
+                        positions.append({
+                            "symbol": h.get("symbol"),
+                            "description": h.get("description"),
+                            "units": h.get("units") or 1,
+                            "price": h.get("manual_price"),
+                            "average_purchase_price": h.get("cost_price"),
+                            "currency": h.get("currency") or base_ccy,
+                            "_account_name": h.get("account_name", "Manual"),
+                            "_id": h["id"],
+                        })
+                    enriched, manual_total = _enrich_positions(positions, base_ccy)
+                    for i, e in enumerate(enriched):
+                        e["id"] = positions[i]["_id"]
+                        e["account_name"] = positions[i]["_account_name"]
+                    manual_section = {
+                        "holdings": enriched,
+                        "total_value_base": manual_total,
+                    }
+                    grand_total += manual_total
+
+                result = {
                     "success": True,
                     "base_currency": base_ccy,
                     "accounts": account_results,
                     "grand_total_base": round(grand_total, 2),
-                }, indent=2)
+                }
+                if manual_section:
+                    result["manual_holdings"] = manual_section
+
+                return json.dumps(result, indent=2)
 
             elif action == "holdings":
                 if not account_id:
@@ -611,10 +665,130 @@ def register_snaptrade_v2(server):
                     "message": f"Base currency changed from {old} to {code}"
                 }, indent=2)
 
+            # --- Manual holding actions ---
+
+            elif action == "add_holding":
+                token = current_user_token.get()
+                if not token:
+                    return json.dumps({"error": "User context required"}, indent=2)
+                if not description:
+                    return json.dumps({"error": "description is required"}, indent=2)
+                if units is None:
+                    return json.dumps({"error": "units is required"}, indent=2)
+                if not currency:
+                    return json.dumps({"error": "currency is required (e.g. USD, GBP)"}, indent=2)
+
+                import uuid as _uuid
+                holding = {
+                    "id": _uuid.uuid4().hex[:8],
+                    "symbol": symbol.upper() if symbol else None,
+                    "description": description,
+                    "units": float(units),
+                    "currency": currency.upper(),
+                    "cost_price": float(cost_price) if cost_price is not None else None,
+                    "manual_price": float(manual_price) if manual_price is not None else None,
+                    "account_name": account_name or "Manual",
+                }
+
+                user_data = get_user(token) or {}
+                all_holdings = user_data.get("manual_holdings", [])
+                all_holdings.append(holding)
+                update_user(token, {"manual_holdings": all_holdings})
+
+                return json.dumps({"success": True, "holding": holding}, indent=2)
+
+            elif action == "update_holding":
+                token = current_user_token.get()
+                if not token:
+                    return json.dumps({"error": "User context required"}, indent=2)
+                if not id:
+                    return json.dumps({"error": "id is required for update_holding"}, indent=2)
+
+                user_data = get_user(token) or {}
+                all_holdings = user_data.get("manual_holdings", [])
+                target = next((h for h in all_holdings if h["id"] == id), None)
+                if not target:
+                    return json.dumps({"error": f"No holding found with id '{id}'"}, indent=2)
+
+                if symbol is not None:
+                    target["symbol"] = symbol.upper() if symbol else None
+                if description is not None:
+                    target["description"] = description
+                if units is not None:
+                    target["units"] = float(units)
+                if currency is not None:
+                    target["currency"] = currency.upper()
+                if cost_price is not None:
+                    target["cost_price"] = float(cost_price)
+                if manual_price is not None:
+                    target["manual_price"] = float(manual_price)
+                if account_name is not None:
+                    target["account_name"] = account_name
+
+                update_user(token, {"manual_holdings": all_holdings})
+                return json.dumps({"success": True, "holding": target}, indent=2)
+
+            elif action == "remove_holding":
+                token = current_user_token.get()
+                if not token:
+                    return json.dumps({"error": "User context required"}, indent=2)
+                if not id:
+                    return json.dumps({"error": "id is required for remove_holding"}, indent=2)
+
+                user_data = get_user(token) or {}
+                all_holdings = user_data.get("manual_holdings", [])
+                before = len(all_holdings)
+                all_holdings = [h for h in all_holdings if h["id"] != id]
+                if len(all_holdings) == before:
+                    return json.dumps({"error": f"No holding found with id '{id}'"}, indent=2)
+
+                update_user(token, {"manual_holdings": all_holdings})
+                return json.dumps({"success": True, "removed": id}, indent=2)
+
+            elif action == "list_holdings":
+                token = current_user_token.get()
+                if not token:
+                    return json.dumps({"error": "User context required"}, indent=2)
+
+                user_data = get_user(token) or {}
+                all_holdings = user_data.get("manual_holdings", [])
+                if not all_holdings:
+                    return json.dumps({"success": True, "holdings": [], "count": 0}, indent=2)
+
+                base_ccy = _get_base_currency()
+                positions = []
+                for h in all_holdings:
+                    positions.append({
+                        "symbol": h.get("symbol"),
+                        "description": h.get("description"),
+                        "units": h.get("units") or 1,
+                        "price": h.get("manual_price"),
+                        "average_purchase_price": h.get("cost_price"),
+                        "currency": h.get("currency") or base_ccy,
+                        "_account_name": h.get("account_name", "Manual"),
+                        "_id": h["id"],
+                    })
+
+                enriched, total_base = _enrich_positions(positions, base_ccy)
+                for i, e in enumerate(enriched):
+                    e["id"] = positions[i]["_id"]
+                    e["account_name"] = positions[i]["_account_name"]
+
+                return json.dumps({
+                    "success": True,
+                    "base_currency": base_ccy,
+                    "holdings": enriched,
+                    "count": len(enriched),
+                    "total_value_base": total_base,
+                }, indent=2)
+
             else:
                 return json.dumps({
                     "error": f"Invalid action: {action}",
-                    "valid_actions": ["connect", "accounts", "portfolio", "holdings", "disconnect", "set_currency"]
+                    "valid_actions": [
+                        "overview", "holdings", "connect", "accounts", "disconnect", "set_currency",
+                        "add_holding", "update_holding", "remove_holding", "list_holdings",
+                    ]
                 }, indent=2)
 
         except Exception as e:
