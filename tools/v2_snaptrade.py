@@ -198,6 +198,46 @@ def _extract_holdings_for_account(client, account_id, user_id, user_secret, base
             "currency": ccy_code,
         })
 
+    # Extract options positions (separate endpoint from stock holdings)
+    option_positions = []
+    try:
+        opts_resp = client.options.list_option_holdings(
+            account_id=account_id,
+            user_id=user_id,
+            user_secret=user_secret
+        )
+        opts = opts_resp.body if hasattr(opts_resp, 'body') else opts_resp
+        for opt in opts:
+            opt = _to_dict(opt)
+            opt_sym = _to_dict(_safe_get(opt, "symbol", {}))
+            option_symbol = _to_dict(_safe_get(opt_sym, "option_symbol", {}))
+            underlying = _to_dict(_safe_get(option_symbol, "underlying_symbol", {}))
+            underlying_ccy = _to_dict(_safe_get(underlying, "currency", {}))
+
+            ticker = _safe_get(underlying, "symbol") if isinstance(underlying, dict) else None
+            strike = _safe_get(option_symbol, "strike_price")
+            expiry = _safe_get(option_symbol, "expiration_date")
+            opt_type = _safe_get(option_symbol, "option_type")
+            ccy_code = _safe_get(underlying_ccy, "code") if isinstance(underlying_ccy, dict) else None
+
+            # Fall back to position-level currency
+            if not ccy_code:
+                pos_ccy = _to_dict(_safe_get(opt, "currency", {}))
+                ccy_code = _safe_get(pos_ccy, "code") if isinstance(pos_ccy, dict) else None
+
+            option_positions.append({
+                "underlying": ticker,
+                "strike": strike,
+                "expiration": str(expiry) if expiry else None,
+                "type": opt_type,
+                "units": _safe_get(opt, "units"),
+                "price": _safe_get(opt, "price"),
+                "average_purchase_price": _safe_get(opt, "average_purchase_price"),
+                "currency": ccy_code,
+            })
+    except Exception:
+        pass
+
     # Extract cash balances
     cash_balances = []
     balances = _safe_get(holdings, "balances", [])
@@ -247,7 +287,22 @@ def _extract_holdings_for_account(client, account_id, user_id, user_secret, base
         cash_total_base += cb["cash_base"]
 
     cash_total_base = round(cash_total_base, 2)
-    account_total_base = round(positions_total + cash_total_base, 2)
+
+    # Compute options value (use price * units * 100 for standard contracts)
+    options_total_base = 0.0
+    for op in option_positions:
+        price = op.get("price") or 0
+        units = op.get("units") or 0
+        value = round(price * units * 100, 2)
+        ccy = op.get("currency") or base_currency
+        fx_rate = cash_fx.get(ccy, 1.0) if ccy != base_currency else 1.0
+        value_base = round(value * fx_rate, 2)
+        op["value"] = value
+        op["value_base"] = value_base
+        options_total_base += value_base
+    options_total_base = round(options_total_base, 2)
+
+    account_total_base = round(positions_total + cash_total_base + options_total_base, 2)
 
     return {
         "account": {
@@ -257,8 +312,10 @@ def _extract_holdings_for_account(client, account_id, user_id, user_secret, base
             "institution": _safe_get(account_data, "institution_name"),
         },
         "positions": enriched,
+        "option_positions": option_positions,
         "cash_balances": cash_balances,
         "positions_value_base": positions_total,
+        "options_value_base": options_total_base,
         "cash_value_base": cash_total_base,
         "total_value_base": account_total_base,
     }
@@ -277,18 +334,25 @@ def register_snaptrade_v2(server):
         """
         Manage brokerage accounts via SnapTrade.
 
+        IMPORTANT: Use "portfolio" as the default action when the user asks about their
+        holdings, positions, or portfolio. Only use "holdings" if they specifically want
+        a single account.
+
         Actions:
+        - portfolio: Get ALL holdings (stocks + options + cash) across ALL accounts with live prices. USE THIS BY DEFAULT.
+        - holdings: Get holdings for a single specific account only
         - connect: Get URL to connect a brokerage account
         - accounts: List connected brokerage accounts
-        - portfolio: Get all holdings and cash across ALL accounts (live prices)
-        - holdings: Get holdings for a specific account (live prices from Yahoo Finance)
         - disconnect: Remove a brokerage connection (by account_id or account_name)
         - set_currency: Set your base currency for portfolio valuation (e.g. "GBP")
+
+        Portfolio and holdings return stock positions, option positions, and cash balances
+        separately, each with values converted to the user's base currency.
 
         Your credentials are automatically loaded from your user profile.
 
         Args:
-            action: Action to perform (connect|accounts|portfolio|holdings|disconnect|set_currency)
+            action: Action to perform (portfolio|holdings|connect|accounts|disconnect|set_currency)
             account_id: Account ID (required for holdings, optional for disconnect)
             account_name: Account or institution name to disconnect (e.g. "Trading212")
             currency: Base currency code for set_currency action (e.g. "GBP", "USD", "EUR")
@@ -297,10 +361,10 @@ def register_snaptrade_v2(server):
             JSON with results
 
         Examples:
-            snaptrade(action="connect")
-            snaptrade(action="accounts")
             snaptrade(action="portfolio")
             snaptrade(action="holdings", account_id="abc-123")
+            snaptrade(action="connect")
+            snaptrade(action="accounts")
             snaptrade(action="disconnect", account_name="Trading212")
             snaptrade(action="set_currency", currency="GBP")
         """

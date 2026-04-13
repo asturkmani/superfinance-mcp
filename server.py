@@ -66,13 +66,15 @@ options(action="analyze", ticker="AAPL")
 
 ### 3. snaptrade — Brokerage account management
 
-**snaptrade(action, ...)**: Create accounts and pull holdings via SnapTrade.
+**snaptrade(action, ...)**: Manage brokerage accounts and view portfolio.
+
+**Use "portfolio" by default** when the user asks about their holdings or positions.
 
 Actions:
+- **portfolio**: Get ALL holdings (stocks + options + cash) across ALL accounts with live prices. **USE THIS BY DEFAULT.**
+- **holdings**: Get holdings for a single specific account only
 - **connect**: Get URL to connect a brokerage account
 - **accounts**: List connected brokerage accounts
-- **portfolio**: Get all holdings and cash across ALL accounts (live prices)
-- **holdings**: Get holdings for a specific account
 - **disconnect**: Remove a brokerage connection
 - **set_currency**: Set your base currency (e.g. "GBP")
 
@@ -80,10 +82,10 @@ Your SnapTrade credentials are automatically loaded from your user profile.
 
 Examples:
 ```
-snaptrade(action="connect")
-snaptrade(action="accounts")
 snaptrade(action="portfolio")
 snaptrade(action="holdings", account_id="abc-123")
+snaptrade(action="connect")
+snaptrade(action="accounts")
 snaptrade(action="set_currency", currency="GBP")
 ```
 """,
