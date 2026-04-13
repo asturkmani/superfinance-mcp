@@ -299,7 +299,7 @@ class TestManualHoldings:
         tok = users_mod.current_user_token.set(token)
         try:
             result = call_tool(
-                action="add_holding", description="Pension VOO",
+                action="add_manual", description="Pension VOO",
                 symbol="VOO", units=500, currency="USD", cost_price=420,
             )
             assert result["success"] is True
@@ -320,7 +320,7 @@ class TestManualHoldings:
         tok = users_mod.current_user_token.set(token)
         try:
             result = call_tool(
-                action="add_holding", description="Loan to Mobility Giant",
+                action="add_manual", description="Loan to Mobility Giant",
                 units=1, currency="GBP", manual_price=25000,
                 account_name="Private",
             )
@@ -336,7 +336,7 @@ class TestManualHoldings:
         token = users_mod.create_user("m@test.com", "uid-m", "secret-m")
         tok = users_mod.current_user_token.set(token)
         try:
-            result = call_tool(action="add_holding", description="X")
+            result = call_tool(action="add_manual", description="X")
             assert "error" in result
         finally:
             users_mod.current_user_token.reset(tok)
@@ -346,12 +346,12 @@ class TestManualHoldings:
         tok = users_mod.current_user_token.set(token)
         try:
             add_result = call_tool(
-                action="add_holding", description="Test",
+                action="add_manual", description="Test",
                 units=10, currency="USD", manual_price=100,
             )
             hid = add_result["holding"]["id"]
 
-            result = call_tool(action="update_holding", id=hid, units=20, manual_price=150)
+            result = call_tool(action="update_manual", id=hid, units=20, manual_price=150)
             assert result["success"] is True
             assert result["holding"]["units"] == 20
             assert result["holding"]["manual_price"] == 150
@@ -363,12 +363,12 @@ class TestManualHoldings:
         tok = users_mod.current_user_token.set(token)
         try:
             add_result = call_tool(
-                action="add_holding", description="To Remove",
+                action="add_manual", description="To Remove",
                 units=1, currency="USD", manual_price=50,
             )
             hid = add_result["holding"]["id"]
 
-            result = call_tool(action="remove_holding", id=hid)
+            result = call_tool(action="remove_manual", id=hid)
             assert result["success"] is True
 
             user = users_mod.get_user(token)
@@ -380,21 +380,11 @@ class TestManualHoldings:
         token = users_mod.create_user("n@test.com", "uid-n", "secret-n")
         tok = users_mod.current_user_token.set(token)
         try:
-            result = call_tool(action="remove_holding", id="nonexistent")
+            result = call_tool(action="remove_manual", id="nonexistent")
             assert "error" in result
         finally:
             users_mod.current_user_token.reset(tok)
 
-    def test_list_holdings_empty(self, tmp_data_dir):
-        token = users_mod.create_user("e@test.com", "uid-e", "secret-e")
-        tok = users_mod.current_user_token.set(token)
-        try:
-            result = call_tool(action="list_holdings")
-            assert result["success"] is True
-            assert result["count"] == 0
-        finally:
-            users_mod.current_user_token.reset(tok)
-
     def test_no_user_context(self):
-        result = call_tool(action="add_holding", description="X", units=1, currency="USD")
+        result = call_tool(action="add_manual", description="X", units=1, currency="USD")
         assert "error" in result

@@ -70,32 +70,29 @@ options(action="analyze", ticker="AAPL")
 
 **Use "overview" by default** when the user asks about their holdings or positions.
 
-Brokerage actions:
+Actions:
 - **overview**: Get ALL holdings (brokerage + manual) across ALL accounts with live prices. **USE THIS BY DEFAULT.**
 - **holdings**: Get holdings for a single specific brokerage account only
 - **connect**: Get URL to connect a brokerage account
 - **accounts**: List connected brokerage accounts
 - **disconnect**: Remove a brokerage connection
 - **set_currency**: Set your base currency (e.g. "GBP")
-
-Manual holding actions:
-- **add_holding**: Add a private holding (pension, private equity, loan, etc.)
-- **update_holding**: Update a manual holding by id
-- **remove_holding**: Remove a manual holding by id
-- **list_holdings**: List all manual holdings with live prices
+- **add_manual**: Add a private holding (pension, private equity, loan, etc.)
+- **update_manual**: Update a manual holding by id
+- **remove_manual**: Remove a manual holding by id
 
 For trackable assets, set `symbol` (e.g. "VOO") to get live Yahoo prices.
 For non-trackable assets, omit symbol and set `manual_price`.
+Manual holdings appear in overview alongside brokerage accounts.
 
 Examples:
 ```
 portfolio(action="overview")
 portfolio(action="holdings", account_id="abc-123")
 portfolio(action="connect")
-portfolio(action="add_holding", description="Pension VOO", symbol="VOO", units=500, currency="USD", cost_price=420)
-portfolio(action="add_holding", description="Loan to Mobility Giant", units=1, currency="GBP", manual_price=25000)
-portfolio(action="list_holdings")
-portfolio(action="remove_holding", id="a1b2c3d4")
+portfolio(action="add_manual", description="Pension VOO", symbol="VOO", units=500, currency="USD", cost_price=420)
+portfolio(action="add_manual", description="Loan to Mobility Giant", units=1, currency="GBP", manual_price=25000)
+portfolio(action="remove_manual", id="a1b2c3d4")
 portfolio(action="set_currency", currency="GBP")
 ```
 """,
