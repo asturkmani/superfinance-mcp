@@ -150,19 +150,19 @@ if __name__ == "__main__":
 <div class="card">
   <h1>SuperFinance</h1>
   <p class="sub">Connect your brokerage accounts to Claude via MCP.</p>
-  <form id="signup-form">
+  <div id="signup-form">
     <label for="email">Email address</label>
     <input type="email" id="email" name="email" placeholder="you@example.com" required>
-    <button type="submit" id="submit-btn">Get my MCP link</button>
-  </form>
+    <button type="button" id="submit-btn">Get my MCP link</button>
+  </div>
   <div class="result" id="result"></div>
 </div>
 <script>
-document.getElementById("signup-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
+document.getElementById("submit-btn").addEventListener("click", async () => {
   const btn = document.getElementById("submit-btn");
   const result = document.getElementById("result");
   const email = document.getElementById("email").value.trim();
+  if (!email || !email.includes("@")) { return; }
   btn.textContent = "Working...";
   btn.disabled = true;
   result.style.display = "none";
