@@ -11,7 +11,7 @@ from typing import Optional
 current_user_token: ContextVar[Optional[str]] = ContextVar("current_user_token", default=None)
 
 # Where the JSON file lives. On Fly.io this should be on a persistent volume.
-_DATA_DIR = Path(os.getenv("DATA_DIR", "data"))
+_DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 _USERS_FILE = _DATA_DIR / "users.json"
 
 
