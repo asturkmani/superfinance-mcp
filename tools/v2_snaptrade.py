@@ -215,12 +215,14 @@ def _extract_holdings_for_account(client, account_id, user_id, user_secret, base
             underlying_ccy = _to_dict(_safe_get(underlying, "currency", {}))
 
             ticker = _safe_get(underlying, "symbol") if isinstance(underlying, dict) else None
+            # SnapTrade ticker e.g. "CORN  260821C00022000" — strip spaces for Yahoo
+            raw_ticker = _safe_get(option_symbol, "ticker") or ""
+            yahoo_ticker = raw_ticker.replace(" ", "")
             strike = _safe_get(option_symbol, "strike_price")
             expiry = _safe_get(option_symbol, "expiration_date")
             opt_type = _safe_get(option_symbol, "option_type")
             ccy_code = _safe_get(underlying_ccy, "code") if isinstance(underlying_ccy, dict) else None
 
-            # Fall back to position-level currency
             if not ccy_code:
                 pos_ccy = _to_dict(_safe_get(opt, "currency", {}))
                 ccy_code = _safe_get(pos_ccy, "code") if isinstance(pos_ccy, dict) else None
@@ -234,9 +236,32 @@ def _extract_holdings_for_account(client, account_id, user_id, user_secret, base
                 "price": _safe_get(opt, "price"),
                 "average_purchase_price": _safe_get(opt, "average_purchase_price"),
                 "currency": ccy_code,
+                "_yahoo_ticker": yahoo_ticker,
             })
     except Exception:
         pass
+
+    # Batch-fetch live option prices from Yahoo Finance
+    opt_yahoo_tickers = {op["_yahoo_ticker"] for op in option_positions if op.get("_yahoo_ticker")}
+    live_opt_prices = {}
+    if opt_yahoo_tickers:
+        try:
+            tickers = yf.Tickers(" ".join(opt_yahoo_tickers))
+            for sym in opt_yahoo_tickers:
+                try:
+                    info = tickers.tickers[sym].info
+                    price = info.get("regularMarketPrice") or info.get("previousClose")
+                    if price:
+                        live_opt_prices[sym] = float(price)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    for op in option_positions:
+        yt = op.pop("_yahoo_ticker", None)
+        if yt and yt in live_opt_prices:
+            op["price"] = live_opt_prices[yt]
 
     # Extract cash balances
     cash_balances = []
