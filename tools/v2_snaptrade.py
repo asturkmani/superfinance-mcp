@@ -119,23 +119,30 @@ def _enrich_positions(positions: list, base_currency: str) -> tuple[list, float]
         units = pos.get("units") or 0
         ccy = pos.get("currency") or base_currency
 
-        price = live_prices.get(sym) or pos.get("price") or 0
-        value = round(units * price, 2)
+        current_price = live_prices.get(sym) or pos.get("price") or 0
+        avg_cost = pos.get("average_purchase_price") or 0
+        market_value = round(units * current_price, 2)
+        cost_basis = round(units * avg_cost, 2)
+        unrealised_pnl = round(market_value - cost_basis, 2)
+        unrealised_pnl_pct = round((unrealised_pnl / cost_basis) * 100, 2) if cost_basis else 0.0
 
         fx_rate = fx_rates.get(ccy, 1.0) if ccy != base_currency else 1.0
-        value_base = round(value * fx_rate, 2)
+        value_base = round(market_value * fx_rate, 2)
         total_base += value_base
 
         enriched.append({
             "symbol": sym,
             "description": pos.get("description"),
-            "units": units,
-            "price": price,
-            "value": value,
-            "value_base": value_base,
             "currency": ccy,
             "fx_rate": fx_rate if ccy != base_currency else None,
-            "open_pnl": pos.get("open_pnl"),
+            "units": units,
+            "avg_cost": avg_cost,
+            "current_price": current_price,
+            "cost_basis": cost_basis,
+            "market_value": market_value,
+            "market_value_base": value_base,
+            "unrealised_pnl": unrealised_pnl,
+            "unrealised_pnl_pct": unrealised_pnl_pct,
         })
 
     return enriched, round(total_base, 2)
@@ -194,7 +201,7 @@ def _extract_holdings_for_account(client, account_id, user_id, user_secret, base
             "description": description,
             "units": _safe_get(position, "units"),
             "price": _safe_get(position, "price"),
-            "open_pnl": _safe_get(position, "open_pnl"),
+            "average_purchase_price": _safe_get(position, "average_purchase_price"),
             "currency": ccy_code,
         })
 
@@ -313,17 +320,30 @@ def _extract_holdings_for_account(client, account_id, user_id, user_secret, base
 
     cash_total_base = round(cash_total_base, 2)
 
-    # Compute options value (use price * units * 100 for standard contracts)
+    # Compute options value with PnL (price * units * 100 for standard contracts)
     options_total_base = 0.0
     for op in option_positions:
-        price = op.get("price") or 0
+        current_price = op.get("price") or 0
         units = op.get("units") or 0
-        value = round(price * units * 100, 2)
+        avg_cost = op.get("average_purchase_price") or 0
+        market_value = round(current_price * units * 100, 2)
+        cost_basis = round(avg_cost * abs(units), 2)
+        unrealised_pnl = round(market_value - cost_basis, 2) if units >= 0 else round(cost_basis - abs(market_value), 2)
+        unrealised_pnl_pct = round((unrealised_pnl / cost_basis) * 100, 2) if cost_basis else 0.0
         ccy = op.get("currency") or base_currency
         fx_rate = cash_fx.get(ccy, 1.0) if ccy != base_currency else 1.0
-        value_base = round(value * fx_rate, 2)
-        op["value"] = value
-        op["value_base"] = value_base
+        value_base = round(market_value * fx_rate, 2)
+
+        op["current_price"] = current_price
+        op["avg_cost"] = avg_cost
+        op["cost_basis"] = cost_basis
+        op["market_value"] = market_value
+        op["market_value_base"] = value_base
+        op["unrealised_pnl"] = unrealised_pnl
+        op["unrealised_pnl_pct"] = unrealised_pnl_pct
+        del op["price"]
+        del op["average_purchase_price"]
+
         options_total_base += value_base
     options_total_base = round(options_total_base, 2)
 

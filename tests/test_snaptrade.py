@@ -177,7 +177,7 @@ class TestSnapTradeHoldings:
             pos = result["positions"][0]
             assert "symbol" in pos
             assert "units" in pos
-            assert "price" in pos
+            assert "current_price" in pos
 
     def test_holdings_missing_account_id(self):
         result = call_snaptrade(action="holdings")
@@ -246,9 +246,11 @@ class TestSnapTradeEnrichedHoldings:
 
         if len(result["positions"]) > 0:
             pos = result["positions"][0]
-            assert "value" in pos
-            assert "value_base" in pos
+            assert "market_value" in pos
+            assert "market_value_base" in pos
             assert "currency" in pos
+            assert "unrealised_pnl" in pos
+            assert "unrealised_pnl_pct" in pos
 
 
 @pytest.mark.skipif(not USER_ID or not USER_SECRET, reason="USER_ID and USER_SECRET required")
