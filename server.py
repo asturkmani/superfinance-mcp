@@ -95,6 +95,20 @@ portfolio(action="add_manual", description="Loan to Mobility Giant", units=1, cu
 portfolio(action="remove_manual", id="a1b2c3d4")
 portfolio(action="set_currency", currency="GBP")
 ```
+
+### 4. x_search — Search X/Twitter via Grok
+
+**x_search(query, ...)**: Search X posts for market sentiment, breaking news, and analyst views.
+
+- **query**: What to search for (e.g. "NVDA earnings reaction", "Fed rate decision")
+- **handles**: Comma-separated X handles to filter (e.g. "unusual_whales,DeItaone")
+- **from_date / to_date**: Date range in YYYY-MM-DD format
+
+Examples:
+```
+x_search(query="What are traders saying about AAPL?")
+x_search(query="Latest views on rate cuts", handles="unusual_whales,DeItaone", from_date="2026-04-01")
+```
 """,
 )
 
