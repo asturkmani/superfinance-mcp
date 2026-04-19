@@ -292,10 +292,9 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
             })
 
         # --- Build the app ---
-        # Get the MCP ASGI app from FastMCP
-        # Use SSE transport for compatibility with Claude's remote MCP client
-        # SSE creates: GET /mcp (SSE stream) + POST /messages (message endpoint)
-        mcp_app = yfinance_server.http_app(path="/mcp", transport="sse")
+        # Use streamable-http transport — single POST /mcp endpoint.
+        # This is what Claude Desktop's remote connector expects.
+        mcp_app = yfinance_server.http_app(path="/mcp", transport="streamable-http")
 
         # Non-MCP routes
         routes_app = Starlette(routes=[
