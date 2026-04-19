@@ -11,6 +11,26 @@ from snaptrade_client import SnapTrade
 from users import current_user_token, get_user, update_user
 
 
+# Minor/fractional currencies that need conversion to their major currency
+# GBX = British pence (1/100 GBP), ILA = Israeli Agorot (1/100 ILS)
+MINOR_CURRENCIES = {
+    "GBX": ("GBP", 100),  # British pence -> pounds
+    "GBx": ("GBP", 100),
+    "ILA": ("ILS", 100),  # Israeli agorot -> shekels
+}
+
+
+def _normalize_currency(ccy: str) -> tuple[str, float]:
+    """Convert minor currency to major currency with divisor.
+
+    Returns (major_currency, divisor) where divisor is the amount to divide by.
+    E.g., GBX -> ("GBP", 100) meaning 1 GBX = 0.01 GBP
+    """
+    if ccy in MINOR_CURRENCIES:
+        return MINOR_CURRENCIES[ccy]
+    return (ccy, 1)
+
+
 _snaptrade_client = None
 
 
@@ -93,23 +113,42 @@ def _enrich_positions(positions: list, base_currency: str) -> tuple[list, float]
         except Exception:
             pass
 
-    # Batch-fetch FX rates
+    # Batch-fetch FX rates (handling minor currencies like GBX -> GBP)
     fx_rates = {}
-    if currencies_needed:
-        fx_tickers_str = " ".join(f"{ccy}{base_currency}=X" for ccy in currencies_needed)
+    currency_divisors = {}
+    major_currencies_needed = set()
+
+    for ccy in currencies_needed:
+        major, divisor = _normalize_currency(ccy)
+        currency_divisors[ccy] = (major, divisor)
+        if major != base_currency:
+            major_currencies_needed.add(major)
+
+    if major_currencies_needed:
+        fx_tickers_str = " ".join(f"{ccy}{base_currency}=X" for ccy in major_currencies_needed)
         try:
             fx_data = yf.Tickers(fx_tickers_str)
-            for ccy in currencies_needed:
+            for major_ccy in major_currencies_needed:
                 try:
-                    pair = f"{ccy}{base_currency}=X"
+                    pair = f"{major_ccy}{base_currency}=X"
                     info = fx_data.tickers[pair].info
                     rate = info.get("regularMarketPrice") or info.get("previousClose")
                     if rate:
-                        fx_rates[ccy] = float(rate)
+                        fx_rates[major_ccy] = float(rate)
                 except Exception:
                     pass
         except Exception:
             pass
+
+    # Build effective FX rates for original currencies (applying divisors)
+    effective_fx_rates = {}
+    for ccy in currencies_needed:
+        major, divisor = currency_divisors[ccy]
+        if major == base_currency:
+            effective_fx_rates[ccy] = 1.0 / divisor
+        else:
+            major_rate = fx_rates.get(major, 1.0)
+            effective_fx_rates[ccy] = major_rate / divisor
 
     # Enrich each position
     enriched = []
@@ -126,7 +165,7 @@ def _enrich_positions(positions: list, base_currency: str) -> tuple[list, float]
         unrealised_pnl = round(market_value - cost_basis, 2)
         unrealised_pnl_pct = round((unrealised_pnl / cost_basis) * 100, 2) if cost_basis else 0.0
 
-        fx_rate = fx_rates.get(ccy, 1.0) if ccy != base_currency else 1.0
+        fx_rate = effective_fx_rates.get(ccy, 1.0) if ccy != base_currency else 1.0
         value_base = round(market_value * fx_rate, 2)
         total_base += value_base
 
@@ -285,29 +324,48 @@ def _extract_holdings_for_account(client, account_id, user_id, user_secret, base
     # Enrich positions with live prices
     enriched, positions_total = _enrich_positions(raw_positions, base_currency)
 
-    # Convert cash to base currency
+    # Convert cash to base currency (handling minor currencies like GBX)
     cash_currencies = set()
     for cb in cash_balances:
         ccy = cb.get("currency")
         if ccy and ccy != base_currency:
             cash_currencies.add(ccy)
 
-    cash_fx = {}
-    if cash_currencies:
-        fx_str = " ".join(f"{c}{base_currency}=X" for c in cash_currencies)
+    # Build FX rates with minor currency handling
+    cash_currency_divisors = {}
+    cash_major_currencies = set()
+    for ccy in cash_currencies:
+        major, divisor = _normalize_currency(ccy)
+        cash_currency_divisors[ccy] = (major, divisor)
+        if major != base_currency:
+            cash_major_currencies.add(major)
+
+    cash_fx_raw = {}
+    if cash_major_currencies:
+        fx_str = " ".join(f"{c}{base_currency}=X" for c in cash_major_currencies)
         try:
             fx_data = yf.Tickers(fx_str)
-            for c in cash_currencies:
+            for c in cash_major_currencies:
                 try:
                     pair = f"{c}{base_currency}=X"
                     info = fx_data.tickers[pair].info
                     rate = info.get("regularMarketPrice") or info.get("previousClose")
                     if rate:
-                        cash_fx[c] = float(rate)
+                        cash_fx_raw[c] = float(rate)
                 except Exception:
                     pass
         except Exception:
             pass
+
+    # Build effective FX rates for original currencies
+    cash_fx = {}
+    for ccy in cash_currencies:
+        major, divisor = cash_currency_divisors[ccy]
+        if major == base_currency:
+            cash_fx[ccy] = 1.0 / divisor
+        else:
+            major_rate = cash_fx_raw.get(major, 1.0)
+            cash_fx[ccy] = major_rate / divisor
 
     cash_total_base = 0.0
     for cb in cash_balances:
@@ -331,6 +389,7 @@ def _extract_holdings_for_account(client, account_id, user_id, user_secret, base
         unrealised_pnl = round(market_value - cost_basis, 2) if units >= 0 else round(cost_basis - abs(market_value), 2)
         unrealised_pnl_pct = round((unrealised_pnl / cost_basis) * 100, 2) if cost_basis else 0.0
         ccy = op.get("currency") or base_currency
+        # Use cash_fx which now handles minor currencies properly
         fx_rate = cash_fx.get(ccy, 1.0) if ccy != base_currency else 1.0
         value_base = round(market_value * fx_rate, 2)
 
