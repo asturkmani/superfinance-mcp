@@ -43,21 +43,28 @@ def register_xsearch_v2(server):
 
         # Build the x_search tool config
         tool_config = {"type": "x_search"}
+        handle_list = []
 
         if handles:
-            handle_list = [h.strip().lstrip("@") for h in handles.split(",") if h.strip()]
+            handle_list = [h.strip().lstrip("@") for h in handles.split(",") if h.strip()][:10]
             if handle_list:
-                tool_config["allowed_x_handles"] = handle_list[:10]
+                tool_config["allowed_x_handles"] = handle_list
 
         if from_date:
             tool_config["from_date"] = from_date
         if to_date:
             tool_config["to_date"] = to_date
 
+        # Inject handle context into query so Grok knows who it's analyzing
+        final_query = query
+        if handle_list:
+            handle_str = ", ".join(f"@{h}" for h in handle_list)
+            final_query = f"Search is restricted to posts from {handle_str}.\n\n{query}"
+
         payload = {
             "model": "grok-4-fast",
             "input": [
-                {"role": "user", "content": query}
+                {"role": "user", "content": final_query}
             ],
             "tools": [tool_config],
         }
