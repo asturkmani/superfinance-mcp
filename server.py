@@ -292,9 +292,9 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
             })
 
         # --- Build the app ---
-        # Use streamable-http transport — single POST /mcp endpoint.
-        # This is what Claude Desktop's remote connector expects.
-        mcp_app = yfinance_server.http_app(path="/mcp", transport="streamable-http")
+        # Use SSE transport — Claude Desktop's remote connector still expects this.
+        # SSE creates: GET /mcp (SSE stream) + POST /messages (JSON-RPC)
+        mcp_app = yfinance_server.http_app(path="/mcp", transport="sse")
 
         # Non-MCP routes
         routes_app = Starlette(routes=[
