@@ -334,16 +334,6 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
                     path = scope.get("path", "")
                     parts = path.strip("/").split("/")
 
-                    # OAuth discovery probes — return empty 200 (means "no OAuth required").
-                    # Claude Desktop probes both /.well-known/... and
-                    # /.well-known/oauth-protected-resource/{token}/mcp per RFC 9728.
-                    if path.startswith("/.well-known/"):
-                        if scope["type"] == "http":
-                            response = JSONResponse({}, status_code=200)
-                            await response(scope, receive, send)
-                            return
-                        return
-
                     # /{token}/mcp or /{token}/messages -> rewrite and set user context
                     if len(parts) >= 2 and parts[1] in ("mcp", "messages"):
                         token = parts[0]
