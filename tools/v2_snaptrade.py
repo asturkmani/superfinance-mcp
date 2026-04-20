@@ -594,16 +594,29 @@ def register_snaptrade_v2(server):
                 if manual_list:
                     positions = []
                     for h in manual_list:
+                        sym = h.get("symbol")
+                        # Skip Yahoo lookup for .PVT (private) tickers — they often
+                        # collide with unrelated public stocks and return garbage.
+                        if sym and ".PVT" in sym.upper():
+                            effective_sym = None
+                        else:
+                            effective_sym = sym
+                        # Price priority: manual_price > (Yahoo for non-PVT) > cost_price
+                        # cost_price fallback keeps PE holdings at book value.
+                        price_fallback = h.get("manual_price")
+                        if price_fallback is None:
+                            price_fallback = h.get("cost_price")
                         positions.append({
-                            "symbol": h.get("symbol"),
+                            "symbol": effective_sym,
                             "description": h.get("description"),
                             "units": h.get("units") or 1,
-                            "price": h.get("manual_price"),
+                            "price": price_fallback,
                             "average_purchase_price": h.get("cost_price"),
                             "currency": h.get("currency") or base_ccy,
                             "_account_name": h.get("account_name", "Manual"),
                             "_id": h["id"],
                             "_notes": h.get("notes"),
+                            "_real_symbol": sym,  # preserve original for display
                         })
                     enriched, manual_total = _enrich_positions(positions, base_ccy)
                     for i, e in enumerate(enriched):
@@ -611,15 +624,33 @@ def register_snaptrade_v2(server):
                         e["account_name"] = positions[i]["_account_name"]
                         if positions[i]["_notes"]:
                             e["notes"] = positions[i]["_notes"]
+                        # Restore original symbol (was stripped for .PVT)
+                        if positions[i].get("_real_symbol"):
+                            e["symbol"] = positions[i]["_real_symbol"]
                     manual_section = {
                         "holdings": enriched,
                         "total_value_base": manual_total,
                     }
                     grand_total += manual_total
 
+                # Category breakdown across all accounts + manual holdings
+                stocks_total = round(sum(a.get("positions_value_base", 0) for a in account_results), 2)
+                options_total = round(sum(a.get("options_value_base", 0) for a in account_results), 2)
+                cash_total = round(sum(a.get("cash_value_base", 0) for a in account_results), 2)
+                manual_total_val = round(manual_section["total_value_base"], 2) if manual_section else 0.0
+
+                totals = {
+                    "stocks": stocks_total,
+                    "options": options_total,
+                    "cash": cash_total,
+                    "manual_holdings": manual_total_val,
+                    "grand_total": round(grand_total, 2),
+                }
+
                 result = {
                     "success": True,
                     "base_currency": base_ccy,
+                    "totals": totals,
                     "accounts": account_results,
                     "grand_total_base": round(grand_total, 2),
                 }
