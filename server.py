@@ -313,12 +313,11 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
             })
 
         # --- Build the app ---
-        # Get the MCP ASGI app from FastMCP
-        # Use SSE transport for compatibility with Claude's remote MCP client
-        # SSE creates: GET /mcp (SSE stream) + POST /messages (message endpoint)
-        mcp_app = yfinance_server.http_app(path="/mcp", transport="sse")
+        # Streamable HTTP (MCP 2025-11-25): single POST/GET /mcp endpoint.
+        # Claude Desktop probes this first; falls back to SSE only if 4xx/5xx.
+        mcp_app = yfinance_server.http_app(path="/mcp", transport="streamable-http")
 
-        # Non-MCP routes
+        # Non-MCP routes (OAuth discovery handled in ASGI middleware below)
         routes_app = Starlette(routes=[
             Route("/", signup_page),
             Route("/signup", signup_handler, methods=["POST"]),
@@ -333,6 +332,16 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
                 if scope["type"] in ("http", "websocket"):
                     path = scope.get("path", "")
                     parts = path.strip("/").split("/")
+
+                    # OAuth discovery probes — return empty 200 (means "no OAuth required").
+                    # Claude Desktop probes both /.well-known/... and
+                    # /.well-known/oauth-protected-resource/{token}/mcp per RFC 9728.
+                    if path.startswith("/.well-known/"):
+                        if scope["type"] == "http":
+                            response = JSONResponse({}, status_code=200)
+                            await response(scope, receive, send)
+                            return
+                        return
 
                     # /{token}/mcp or /{token}/messages -> rewrite and set user context
                     if len(parts) >= 2 and parts[1] in ("mcp", "messages"):
