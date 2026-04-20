@@ -313,26 +313,37 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
             })
 
         # --- Build the app ---
-        # SSE transport — Claude Desktop connects to this successfully.
-        # streamable-http is rejected by FastMCP with 400 on Claude's requests
-        # (likely Accept-header mismatch). Stick with SSE.
-        mcp_app = yfinance_server.http_app(path="/mcp", transport="sse")
+        # Dual transport: SSE + streamable-http on the same /mcp path.
+        # Claude Desktop probes streamable-http (POST /mcp) before falling
+        # back to SSE; without it, Claude marks the connector broken even
+        # though SSE fallback works. Dispatch by HTTP method.
+        sse_app = yfinance_server.http_app(path="/mcp", transport="sse")
+        http_app = yfinance_server.http_app(path="/mcp", transport="streamable-http")
 
-        # Non-MCP routes (OAuth discovery handled in ASGI middleware below)
+        # Non-MCP routes
         routes_app = Starlette(routes=[
             Route("/", signup_page),
             Route("/signup", signup_handler, methods=["POST"]),
             Route("/health", health_check),
         ])
 
-        # ASGI middleware that rewrites /{token}/mcp -> /mcp and sets user context.
-        # Pure ASGI so streaming (SSE, streamable-http) works correctly.
-        # SSE transport uses /mcp (GET, SSE stream) + /messages (POST, JSON-RPC)
+        # ASGI middleware:
+        #   - GET /mcp, POST /messages -> SSE transport (stream + JSON-RPC)
+        #   - POST /mcp, DELETE /mcp  -> streamable-http transport
+        #   - Token path /{token}/... is stripped before forwarding.
         class App:
             async def __call__(self, scope, receive, send):
                 if scope["type"] in ("http", "websocket"):
                     path = scope.get("path", "")
+                    method = scope.get("method", "")
                     parts = path.strip("/").split("/")
+
+                    def pick_mcp_app(pth: str, mth: str):
+                        # POST/DELETE /mcp -> streamable-http
+                        # GET /mcp or any /messages -> SSE
+                        if pth.startswith("/mcp") and mth in ("POST", "DELETE"):
+                            return http_app
+                        return sse_app
 
                     # /{token}/mcp or /{token}/messages -> rewrite and set user context
                     if len(parts) >= 2 and parts[1] in ("mcp", "messages"):
@@ -351,24 +362,26 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
                         # Rewrite path: strip the token prefix
                         new_path = path[len(f"/{token}"):]
                         scope = dict(scope, path=new_path or "/")
+                        target = pick_mcp_app(new_path, method)
 
                         tok = current_user_token.set(token)
                         try:
-                            await mcp_app(scope, receive, send)
+                            await target(scope, receive, send)
                         finally:
                             current_user_token.reset(tok)
                         return
 
                     # /mcp or /messages -> pass to MCP app directly (admin/env-var usage)
                     if path == "/mcp" or path.startswith("/mcp/") or path == "/messages" or path.startswith("/messages/"):
-                        await mcp_app(scope, receive, send)
+                        await pick_mcp_app(path, method)(scope, receive, send)
                         return
 
                     # Everything else -> routes app (signup, health)
                     await routes_app(scope, receive, send)
                 else:
-                    # lifespan etc
-                    await mcp_app(scope, receive, send)
+                    # lifespan etc — both apps need it
+                    await sse_app(scope, receive, send)
+                    await http_app(scope, receive, send)
 
         app = App()
 
