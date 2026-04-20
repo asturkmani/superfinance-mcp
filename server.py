@@ -292,16 +292,10 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
             })
 
         # --- Build the app ---
-        # Streamable HTTP transport (MCP 2025-11-25 spec) — Claude Desktop now
-        # uses this by default. Single POST/GET /mcp endpoint.
-        # json_response=True: return plain JSON instead of SSE streams.
-        # Anthropic's MCP proxy struggles with FastMCP's SSE ping comments
-        # during long tool calls, so we force plain JSON responses.
-        mcp_app = yfinance_server.http_app(
-            path="/mcp",
-            transport="streamable-http",
-            json_response=True,
-        )
+        # Get the MCP ASGI app from FastMCP
+        # Use SSE transport for compatibility with Claude's remote MCP client
+        # SSE creates: GET /mcp (SSE stream) + POST /messages (message endpoint)
+        mcp_app = yfinance_server.http_app(path="/mcp", transport="sse")
 
         # Non-MCP routes
         routes_app = Starlette(routes=[
