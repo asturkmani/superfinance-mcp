@@ -313,9 +313,10 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
             })
 
         # --- Build the app ---
-        # Streamable HTTP (MCP 2025-11-25): single POST/GET /mcp endpoint.
-        # Claude Desktop probes this first; falls back to SSE only if 4xx/5xx.
-        mcp_app = yfinance_server.http_app(path="/mcp", transport="streamable-http")
+        # SSE transport — Claude Desktop connects to this successfully.
+        # streamable-http is rejected by FastMCP with 400 on Claude's requests
+        # (likely Accept-header mismatch). Stick with SSE.
+        mcp_app = yfinance_server.http_app(path="/mcp", transport="sse")
 
         # Non-MCP routes (OAuth discovery handled in ASGI middleware below)
         routes_app = Starlette(routes=[
