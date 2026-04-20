@@ -441,6 +441,7 @@ def register_snaptrade_v2(server):
         units: Optional[float] = None,
         cost_price: Optional[float] = None,
         manual_price: Optional[float] = None,
+        notes: Optional[str] = None,
     ) -> str:
         """
         Unified portfolio management — brokerage accounts (SnapTrade) and manual/private holdings.
@@ -602,11 +603,14 @@ def register_snaptrade_v2(server):
                             "currency": h.get("currency") or base_ccy,
                             "_account_name": h.get("account_name", "Manual"),
                             "_id": h["id"],
+                            "_notes": h.get("notes"),
                         })
                     enriched, manual_total = _enrich_positions(positions, base_ccy)
                     for i, e in enumerate(enriched):
                         e["id"] = positions[i]["_id"]
                         e["account_name"] = positions[i]["_account_name"]
+                        if positions[i]["_notes"]:
+                            e["notes"] = positions[i]["_notes"]
                     manual_section = {
                         "holdings": enriched,
                         "total_value_base": manual_total,
@@ -744,6 +748,7 @@ def register_snaptrade_v2(server):
                     "cost_price": float(cost_price) if cost_price is not None else None,
                     "manual_price": float(manual_price) if manual_price is not None else None,
                     "account_name": account_name or "Manual",
+                    "notes": notes,
                 }
 
                 user_data = get_user(token) or {}
@@ -780,6 +785,8 @@ def register_snaptrade_v2(server):
                     target["manual_price"] = float(manual_price)
                 if account_name is not None:
                     target["account_name"] = account_name
+                if notes is not None:
+                    target["notes"] = notes
 
                 update_user(token, {"manual_holdings": all_holdings})
                 return json.dumps({"success": True, "holding": target}, indent=2)
