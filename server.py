@@ -315,8 +315,7 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
         # --- Build the app ---
         # Dual transport: SSE + streamable-http on the same /mcp path.
         # Claude Desktop probes streamable-http (POST /mcp) before falling
-        # back to SSE; without it, Claude marks the connector broken even
-        # though SSE fallback works. Dispatch by HTTP method.
+        # back to SSE. Dispatch by HTTP method.
         sse_app = yfinance_server.http_app(path="/mcp", transport="sse")
         http_app = yfinance_server.http_app(path="/mcp", transport="streamable-http")
 
@@ -327,63 +326,63 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
             Route("/health", health_check),
         ])
 
-        # ASGI middleware:
-        #   - GET /mcp, POST /messages -> SSE transport (stream + JSON-RPC)
-        #   - POST /mcp, DELETE /mcp  -> streamable-http transport
-        #   - Token path /{token}/... is stripped before forwarding.
-        class App:
-            async def __call__(self, scope, receive, send):
-                if scope["type"] in ("http", "websocket"):
-                    path = scope.get("path", "")
-                    method = scope.get("method", "")
-                    parts = path.strip("/").split("/")
+        # Dispatcher: pick the right MCP transport based on method.
+        #   POST/DELETE /mcp -> streamable-http
+        #   GET /mcp or any /messages -> SSE
+        async def dispatch_mcp(scope, receive, send):
+            path = scope.get("path", "")
+            method = scope.get("method", "")
+            if path.startswith("/mcp") and method in ("POST", "DELETE"):
+                await http_app(scope, receive, send)
+            else:
+                await sse_app(scope, receive, send)
 
-                    def pick_mcp_app(pth: str, mth: str):
-                        # POST/DELETE /mcp -> streamable-http
-                        # GET /mcp or any /messages -> SSE
-                        if pth.startswith("/mcp") and mth in ("POST", "DELETE"):
-                            return http_app
-                        return sse_app
+        # Token-aware ASGI wrapper on top of the dispatcher.
+        async def root_app(scope, receive, send):
+            if scope["type"] not in ("http", "websocket"):
+                return  # lifespan handled below by Starlette combiner
+            path = scope.get("path", "")
+            parts = path.strip("/").split("/")
 
-                    # /{token}/mcp or /{token}/messages -> rewrite and set user context
-                    if len(parts) >= 2 and parts[1] in ("mcp", "messages"):
-                        token = parts[0]
-                        user = get_user(token)
-                        if not user:
-                            if scope["type"] == "http":
-                                response = JSONResponse(
-                                    {"error": "Invalid token"},
-                                    status_code=401,
-                                )
-                                await response(scope, receive, send)
-                                return
-                            return
+            # /{token}/mcp or /{token}/messages -> strip token, set user context
+            if len(parts) >= 2 and parts[1] in ("mcp", "messages"):
+                token = parts[0]
+                user = get_user(token)
+                if not user:
+                    await JSONResponse({"error": "Invalid token"}, status_code=401)(scope, receive, send)
+                    return
+                new_path = path[len(f"/{token}"):]
+                scope = dict(scope, path=new_path or "/")
+                tok = current_user_token.set(token)
+                try:
+                    await dispatch_mcp(scope, receive, send)
+                finally:
+                    current_user_token.reset(tok)
+                return
 
-                        # Rewrite path: strip the token prefix
-                        new_path = path[len(f"/{token}"):]
-                        scope = dict(scope, path=new_path or "/")
-                        target = pick_mcp_app(new_path, method)
+            # Raw /mcp or /messages (admin / env-var usage)
+            if path == "/mcp" or path.startswith("/mcp/") or path == "/messages" or path.startswith("/messages/"):
+                await dispatch_mcp(scope, receive, send)
+                return
 
-                        tok = current_user_token.set(token)
-                        try:
-                            await target(scope, receive, send)
-                        finally:
-                            current_user_token.reset(tok)
-                        return
+            await routes_app(scope, receive, send)
 
-                    # /mcp or /messages -> pass to MCP app directly (admin/env-var usage)
-                    if path == "/mcp" or path.startswith("/mcp/") or path == "/messages" or path.startswith("/messages/"):
-                        await pick_mcp_app(path, method)(scope, receive, send)
-                        return
+        # Combine the two MCP apps' lifespans so streamable-http's task group
+        # is initialized properly.
+        from contextlib import asynccontextmanager
 
-                    # Everything else -> routes app (signup, health)
-                    await routes_app(scope, receive, send)
-                else:
-                    # lifespan etc — both apps need it
-                    await sse_app(scope, receive, send)
-                    await http_app(scope, receive, send)
+        @asynccontextmanager
+        async def combined_lifespan(app):
+            async with sse_app.lifespan_context(sse_app):
+                async with http_app.lifespan_context(http_app):
+                    yield
 
-        app = App()
+        # Wrap root_app in a Starlette app so the lifespan runs.
+        from starlette.routing import Mount
+        app = Starlette(
+            lifespan=combined_lifespan,
+            routes=[Mount("/", app=root_app)],
+        )
 
         print("Signup page: /")
         print("Per-user MCP: /{token}/mcp")
