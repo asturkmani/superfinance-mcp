@@ -373,8 +373,8 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
 
         @asynccontextmanager
         async def combined_lifespan(app):
-            async with sse_app.lifespan_context(sse_app):
-                async with http_app.lifespan_context(http_app):
+            async with sse_app.router.lifespan_context(sse_app):
+                async with http_app.router.lifespan_context(http_app):
                     yield
 
         # Wrap root_app in a Starlette app so the lifespan runs.
