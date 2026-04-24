@@ -158,7 +158,20 @@ def _enrich_positions(positions: list, base_currency: str) -> tuple[list, float]
         units = pos.get("units") or 0
         ccy = pos.get("currency") or base_currency
 
-        current_price = live_prices.get(sym) or pos.get("price") or 0
+        # Price priority: Yahoo Finance > manual_price > cost_price
+        price_source = "unknown"
+        current_price = 0
+
+        if sym and sym in live_prices:
+            current_price = live_prices[sym]
+            price_source = "yahoo"
+        elif pos.get("price"):  # manual_price
+            current_price = pos.get("price")
+            price_source = "manual"
+        elif pos.get("average_purchase_price"):  # cost_price as fallback
+            current_price = pos.get("average_purchase_price")
+            price_source = "cost"
+
         avg_cost = pos.get("average_purchase_price") or 0
         market_value = round(units * current_price, 2)
         cost_basis = round(units * avg_cost, 2)
@@ -177,6 +190,7 @@ def _enrich_positions(positions: list, base_currency: str) -> tuple[list, float]
             "units": units,
             "avg_cost": avg_cost,
             "current_price": current_price,
+            "price_source": price_source,
             "cost_basis": cost_basis,
             "market_value": market_value,
             "market_value_base": value_base,
