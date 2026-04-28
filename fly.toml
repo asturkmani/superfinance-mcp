@@ -10,9 +10,12 @@ primary_region = 'ams'
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = true
+  # Keep one machine always running. Auto-stop causes ~5-10s cold-start
+  # windows where Fly proxy returns "Proxy is having trouble reaching app"
+  # to MCP clients (Claude Desktop), which marks the connector broken.
+  auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
   processes = ["app"]
 
 [[http_service.checks]]
