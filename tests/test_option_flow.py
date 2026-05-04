@@ -1,0 +1,241 @@
+"""Integration tests for the option_flow SQLite-backed tool."""
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+from fastmcp import FastMCP
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import db as db_mod  # noqa: E402
+import users as users_mod  # noqa: E402
+from tools.v2_option_flow import register_option_flow_v2  # noqa: E402
+
+
+@pytest.fixture()
+def fresh_db(tmp_path):
+    """Point the SQLite DB at a temp file and re-init."""
+    old_data = db_mod._DATA_DIR
+    old_db = db_mod._DB_PATH
+    db_mod._DATA_DIR = tmp_path
+    db_mod._DB_PATH = tmp_path / "test.db"
+    db_mod.init_db()
+    yield tmp_path
+    db_mod._DATA_DIR = old_data
+    db_mod._DB_PATH = old_db
+
+
+@pytest.fixture()
+def tool_fn(fresh_db):
+    server = FastMCP("test")
+    register_option_flow_v2(server)
+    for t in server._tool_manager._tools.values():
+        if t.name == "option_flow":
+            return t.fn
+    raise AssertionError("option_flow tool not registered")
+
+
+@pytest.fixture()
+def user_token():
+    """Set a fake user token in the context."""
+    tok = users_mod.current_user_token.set("test-token-xyz")
+    yield "test-token-xyz"
+    users_mod.current_user_token.reset(tok)
+
+
+def call(fn, **kwargs):
+    return json.loads(fn(**kwargs))
+
+
+# ---------------------------------------------------------------------------
+
+class TestOptionFlowAdd:
+
+    def test_add_basic(self, tool_fn, user_token):
+        r = call(tool_fn, action="add",
+                 symbol="AMZN", order_type="Calls Bought",
+                 strike="270C", expiry="2026-06-05",
+                 contracts=5000, trade_date="2026-05-04 10:37")
+        assert r["success"] is True
+        assert r["trade"]["symbol"] == "AMZN"
+        assert r["trade"]["contracts"] == 5000
+        assert r["trade"]["source"] == "manual"
+        assert r["trade"]["id"] >= 1
+
+    def test_add_validates_order_type(self, tool_fn, user_token):
+        r = call(tool_fn, action="add",
+                 symbol="AMZN", order_type="bogus",
+                 strike="270C", expiry="2026-06-05",
+                 contracts=5000, trade_date="2026-05-04 10:37")
+        assert "error" in r
+
+    def test_add_requires_fields(self, tool_fn, user_token):
+        r = call(tool_fn, action="add", symbol="AMZN")
+        assert "error" in r
+
+    def test_add_no_user_context(self, tool_fn):
+        r = call(tool_fn, action="add",
+                 symbol="AMZN", order_type="Calls Bought",
+                 strike="270C", expiry="2026-06-05",
+                 contracts=5000, trade_date="2026-05-04 10:37")
+        assert "error" in r
+
+    def test_symbol_uppercased(self, tool_fn, user_token):
+        r = call(tool_fn, action="add",
+                 symbol="amzn", order_type="Calls Bought",
+                 strike="270C", expiry="2026-06-05",
+                 contracts=5000, trade_date="2026-05-04 10:37")
+        assert r["trade"]["symbol"] == "AMZN"
+
+
+class TestOptionFlowBulk:
+
+    def test_add_bulk(self, tool_fn, user_token):
+        rows = json.dumps([
+            {"symbol": "AMZN", "order_type": "Calls Bought", "strike": "270C",
+             "expiry": "2026-06-05", "contracts": 5000, "trade_date": "2026-05-04 10:37"},
+            {"symbol": "TSLA", "order_type": "Puts Bought", "strike": "250P",
+             "expiry": "2026-06-18", "contracts": 2500, "trade_date": "2026-05-04 10:12"},
+        ])
+        r = call(tool_fn, action="add_bulk", rows=rows)
+        assert r["success"] is True
+        assert r["inserted"] == 2
+
+    def test_bulk_partial_failures(self, tool_fn, user_token):
+        rows = json.dumps([
+            {"symbol": "AMZN", "order_type": "Calls Bought", "strike": "270C",
+             "expiry": "2026-06-05", "contracts": 5000, "trade_date": "2026-05-04 10:37"},
+            {"symbol": "BAD", "order_type": "Invalid Type"},
+        ])
+        r = call(tool_fn, action="add_bulk", rows=rows)
+        assert r["inserted"] == 1
+        assert len(r["errors"]) == 1
+
+    def test_bulk_invalid_json(self, tool_fn, user_token):
+        r = call(tool_fn, action="add_bulk", rows="not json")
+        assert "error" in r
+
+
+class TestOptionFlowQuery:
+
+    def _seed(self, fn):
+        for sym, ot, strike, exp, c, d in [
+            ("AMZN", "Calls Bought", "270C", "2026-06-05", 5000, "2026-05-04 10:37"),
+            ("AMZN", "Puts Bought", "250P", "2026-06-18", 2500, "2026-05-04 10:12"),
+            ("TSLA", "Calls Bought", "300C", "2026-06-21", 1000, "2026-05-03 09:00"),
+            ("AMZN", "Calls Bought", "315C", "2026-08-21", 3000, "2026-05-01 13:55"),
+        ]:
+            call(fn, action="add", symbol=sym, order_type=ot, strike=strike,
+                 expiry=exp, contracts=c, trade_date=d)
+
+    def test_list_all(self, tool_fn, user_token):
+        self._seed(tool_fn)
+        r = call(tool_fn, action="list")
+        assert r["count"] == 4
+        # Sorted by trade_date DESC
+        assert r["trades"][0]["trade_date"] == "2026-05-04 10:37"
+
+    def test_list_filter_symbol(self, tool_fn, user_token):
+        self._seed(tool_fn)
+        r = call(tool_fn, action="list", symbol="AMZN")
+        assert r["count"] == 3
+
+    def test_list_filter_order_type(self, tool_fn, user_token):
+        self._seed(tool_fn)
+        r = call(tool_fn, action="list", order_type="Calls Bought")
+        assert r["count"] == 3
+
+    def test_list_filter_date_range(self, tool_fn, user_token):
+        self._seed(tool_fn)
+        r = call(tool_fn, action="list",
+                 from_date="2026-05-04 00:00", to_date="2026-05-04 23:59")
+        assert r["count"] == 2
+
+    def test_list_limit(self, tool_fn, user_token):
+        self._seed(tool_fn)
+        r = call(tool_fn, action="list", limit=2)
+        assert r["count"] == 2
+        assert r["total_matching"] == 4
+
+    def test_get_by_id(self, tool_fn, user_token):
+        self._seed(tool_fn)
+        listed = call(tool_fn, action="list")
+        first_id = listed["trades"][0]["id"]
+        r = call(tool_fn, action="get", id=first_id)
+        assert r["trade"]["id"] == first_id
+
+
+class TestOptionFlowMutations:
+
+    def _add(self, fn):
+        return call(fn, action="add",
+                    symbol="AMZN", order_type="Calls Bought",
+                    strike="270C", expiry="2026-06-05",
+                    contracts=5000, trade_date="2026-05-04 10:37")
+
+    def test_update(self, tool_fn, user_token):
+        added = self._add(tool_fn)
+        tid = added["trade"]["id"]
+        r = call(tool_fn, action="update", id=tid, contracts=7500, notes="big")
+        assert r["trade"]["contracts"] == 7500
+        assert r["trade"]["notes"] == "big"
+        # Other fields preserved
+        assert r["trade"]["symbol"] == "AMZN"
+
+    def test_update_invalid_order_type(self, tool_fn, user_token):
+        tid = self._add(tool_fn)["trade"]["id"]
+        r = call(tool_fn, action="update", id=tid, order_type="bogus")
+        assert "error" in r
+
+    def test_remove(self, tool_fn, user_token):
+        tid = self._add(tool_fn)["trade"]["id"]
+        r = call(tool_fn, action="remove", id=tid)
+        assert r["success"] is True
+        # Now gone
+        gone = call(tool_fn, action="get", id=tid)
+        assert "error" in gone
+
+    def test_remove_unknown(self, tool_fn, user_token):
+        r = call(tool_fn, action="remove", id=99999)
+        assert "error" in r
+
+
+class TestOptionFlowIsolation:
+
+    def test_users_dont_see_each_others_trades(self, tool_fn):
+        # Insert as user A
+        tok_a = users_mod.current_user_token.set("user-A")
+        call(tool_fn, action="add", symbol="AMZN", order_type="Calls Bought",
+             strike="270C", expiry="2026-06-05", contracts=5000,
+             trade_date="2026-05-04 10:37")
+        users_mod.current_user_token.reset(tok_a)
+
+        # Switch to user B — should see nothing
+        tok_b = users_mod.current_user_token.set("user-B")
+        try:
+            r = call(tool_fn, action="list")
+            assert r["count"] == 0
+        finally:
+            users_mod.current_user_token.reset(tok_b)
+
+
+class TestOptionFlowClear:
+
+    def test_clear_requires_confirm(self, tool_fn, user_token):
+        call(tool_fn, action="add", symbol="AMZN", order_type="Calls Bought",
+             strike="270C", expiry="2026-06-05", contracts=5000,
+             trade_date="2026-05-04 10:37")
+        r = call(tool_fn, action="clear")
+        assert "error" in r
+        # Still there
+        assert call(tool_fn, action="list")["count"] == 1
+
+    def test_clear_with_confirm(self, tool_fn, user_token):
+        call(tool_fn, action="add", symbol="AMZN", order_type="Calls Bought",
+             strike="270C", expiry="2026-06-05", contracts=5000,
+             trade_date="2026-05-04 10:37")
+        r = call(tool_fn, action="clear", source="CONFIRM_DELETE_ALL")
+        assert r["deleted"] == 1
+        assert call(tool_fn, action="list")["count"] == 0

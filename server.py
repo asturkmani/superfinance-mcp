@@ -130,6 +130,28 @@ watchlist(action="add_note", ticker="NVDA", text="Jim Cramer went bearish today"
 watchlist(action="list")
 watchlist(action="get", ticker="NVDA")
 ```
+
+### 6. option_flow — Track option flow trades (SQLite-backed)
+
+**option_flow(action, ...)**: Manually log unusual option activity.
+
+Schema: trade_date, order_type ("Calls Bought" | "Puts Bought" | "Calls Sold" | "Puts Sold"),
+symbol, strike (e.g. "270C", "320/370C"), expiry, contracts, optional notes/source.
+
+Actions:
+- **add**: Insert a single trade
+- **add_bulk**: Insert many at once (rows = JSON array)
+- **update / remove / get**: by id
+- **list**: filter by symbol, order_type, from_date, to_date
+
+Examples:
+```
+option_flow(action="add", symbol="AMZN", order_type="Calls Bought",
+            strike="270C", expiry="2026-06-05", contracts=5000,
+            trade_date="2026-05-04 10:37")
+option_flow(action="list", symbol="AMZN", limit=20)
+option_flow(action="list", from_date="2026-05-01", order_type="Calls Bought")
+```
 """,
 )
 
