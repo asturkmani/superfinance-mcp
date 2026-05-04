@@ -7,7 +7,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 
 # Copy application code (needed for -e install)
-COPY server.py users.py ./
+COPY server.py users.py db.py ./
 COPY tools/ ./tools/
 
 # Install dependencies using the lockfile
@@ -22,7 +22,7 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 
 # Copy application code
-COPY server.py users.py ./
+COPY server.py users.py db.py ./
 COPY tools/ ./tools/
 COPY pyproject.toml ./
 
