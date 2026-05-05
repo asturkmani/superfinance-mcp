@@ -170,6 +170,12 @@ if __name__ == "__main__":
         from starlette.requests import Request
         from starlette.routing import Route
 
+        from oauth import (
+            oauth_protected_resource, oauth_authorization_server,
+            oauth_register, oauth_authorize_get, oauth_token,
+            make_authorize_post, extract_bearer_token,
+        )
+
         def _build_mcp_url(request, token):
             host = request.headers.get("host", f"localhost:{port}")
             scheme = "https" if "fly.dev" in host else request.url.scheme
@@ -276,6 +282,35 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
         async def signup_page(request: Request):
             return HTMLResponse(SIGNUP_HTML)
 
+        def find_or_create_user_token(email: str) -> str:
+            """Look up the user's token by email, or register a new SnapTrade user
+            and create a record. Raises on errors. Returns the token."""
+            email = (email or "").strip().lower()
+            if not email or "@" not in email:
+                raise ValueError("A valid email is required")
+
+            existing = get_user_by_email(email)
+            if existing:
+                token, _ = existing
+                return token
+
+            client = get_snaptrade_client()
+            if not client:
+                raise RuntimeError("SnapTrade not configured on server")
+
+            response = client.authentication.register_snap_trade_user(user_id=email)
+            data = response.body if hasattr(response, 'body') else response
+            if hasattr(data, 'to_dict'):
+                data = data.to_dict()
+            user_secret = (
+                data.get("userSecret") if isinstance(data, dict)
+                else getattr(data, 'user_secret', None)
+            )
+            if not user_secret:
+                raise RuntimeError("SnapTrade did not return a userSecret")
+
+            return create_user(email, email, user_secret)
+
         async def signup_handler(request: Request):
             """POST /signup — create or find user by email."""
             try:
@@ -287,44 +322,14 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
             if not email or "@" not in email:
                 return JSONResponse({"error": "A valid email is required"}, status_code=400)
 
-            # Check if user already exists
             existing = get_user_by_email(email)
-            if existing:
-                token, _ = existing
-                return JSONResponse({
-                    "new_account": False,
-                    "mcp_url": _build_mcp_url(request, token),
-                })
-
-            # Register new user with SnapTrade
-            client = get_snaptrade_client()
-            if not client:
-                return JSONResponse({"error": "SnapTrade not configured on server"}, status_code=500)
-
-            # Use email as the SnapTrade user_id (unique per user)
-            snaptrade_user_id = email
             try:
-                response = client.authentication.register_snap_trade_user(user_id=snaptrade_user_id)
-                data = response.body if hasattr(response, 'body') else response
-                if hasattr(data, 'to_dict'):
-                    data = data.to_dict()
-                user_secret = (
-                    data.get("userSecret") if isinstance(data, dict)
-                    else getattr(data, 'user_secret', None)
-                )
+                token = find_or_create_user_token(email)
             except Exception as e:
-                return JSONResponse(
-                    {"error": f"Registration failed: {e}"},
-                    status_code=400,
-                )
-
-            if not user_secret:
-                return JSONResponse({"error": "No user_secret returned"}, status_code=500)
-
-            token = create_user(email, snaptrade_user_id, user_secret)
+                return JSONResponse({"error": str(e)}, status_code=400)
 
             return JSONResponse({
-                "new_account": True,
+                "new_account": existing is None,
                 "mcp_url": _build_mcp_url(request, token),
             })
 
@@ -339,11 +344,20 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
         # on Claude Desktop's follow-up requests. SSE is reliable.
         mcp_app = yfinance_server.http_app(path="/mcp", transport="sse")
 
-        # Non-MCP routes
+        oauth_authorize_post = make_authorize_post(find_or_create_user_token)
+
+        # Non-MCP routes (signup + OAuth shim for Perplexity-style clients)
         routes_app = Starlette(routes=[
             Route("/", signup_page),
             Route("/signup", signup_handler, methods=["POST"]),
             Route("/health", health_check),
+            # OAuth 2.1 + DCR shim
+            Route("/.well-known/oauth-protected-resource", oauth_protected_resource),
+            Route("/.well-known/oauth-authorization-server", oauth_authorization_server),
+            Route("/register", oauth_register, methods=["POST"]),
+            Route("/authorize", oauth_authorize_get, methods=["GET"]),
+            Route("/authorize", oauth_authorize_post, methods=["POST"]),
+            Route("/token", oauth_token, methods=["POST"]),
         ])
 
         # Token-aware ASGI wrapper forwarding to SSE transport.
@@ -376,8 +390,26 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
                             current_user_token.reset(tok)
                         return
 
-                    # Raw /mcp or /messages (admin / env-var usage)
+                    # Raw /mcp or /messages — accept Bearer auth (OAuth path).
+                    # Falls through to MCP unauth'd if no token (admin / env-var usage).
                     if path == "/mcp" or path.startswith("/mcp/") or path == "/messages" or path.startswith("/messages/"):
+                        token = extract_bearer_token(scope.get("headers", []))
+                        if token and get_user(token):
+                            tok = current_user_token.set(token)
+                            try:
+                                await mcp_app(scope, receive, send)
+                            finally:
+                                current_user_token.reset(tok)
+                            return
+                        # No valid bearer — for OAuth clients, require auth
+                        if token:
+                            response = JSONResponse(
+                                {"error": "invalid_token"}, status_code=401,
+                                headers={"WWW-Authenticate": 'Bearer realm="superfinance"'},
+                            )
+                            await response(scope, receive, send)
+                            return
+                        # No bearer at all → fall through (admin/env-var path)
                         await mcp_app(scope, receive, send)
                         return
 
