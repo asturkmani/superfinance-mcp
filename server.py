@@ -131,9 +131,26 @@ watchlist(action="list")
 watchlist(action="get", ticker="NVDA")
 ```
 
-### 6. option_flow — Track option flow trades (SQLite-backed)
+### 6. x_accounts — X/Twitter account directory
 
-**option_flow(action, ...)**: Manually log unusual option activity.
+**x_accounts(action, ...)**: Store X handles and notes on why to follow/check them.
+
+Actions:
+- **list**: List accounts and return `handles_csv` for x_search
+- **get**: Get one account
+- **add / upsert / update / remove**: Manage handles and notes
+- **search**: Search saved handles/notes by keyword
+
+Examples:
+```
+x_accounts(action="add", handle="unusual_whales", note="options flow and large sweeps")
+x_accounts(action="search", query="options")
+x_search(query="latest bullish semiconductor flow", handles="unusual_whales,DeItaone")
+```
+
+### 7. option_flow — Track option flow trades (SQLite-backed)
+
+**option_flow(action, ...)**: Query synced JBT option flow and manually log unusual option activity.
 
 Schema: trade_date, order_type ("Calls Bought" | "Puts Bought" | "Calls Sold" | "Puts Sold"),
 symbol, strike (e.g. "270C", "320/370C"), expiry, contracts, optional notes/source.
