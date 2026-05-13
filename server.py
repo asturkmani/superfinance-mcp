@@ -8,7 +8,7 @@ from fastmcp import FastMCP
 from dotenv import load_dotenv
 
 # Load environment variables from .env file (for local development)
-env_path = Path(__file__).parent / '.env'
+env_path = Path(__file__).parent / ".env"
 if env_path.exists():
     load_dotenv(env_path)
 
@@ -171,10 +171,15 @@ if __name__ == "__main__":
         from starlette.routing import Route
 
         from oauth import (
-            oauth_protected_resource, oauth_authorization_server,
-            oauth_register, oauth_authorize_get, oauth_token,
-            make_authorize_post, extract_bearer_token,
+            oauth_protected_resource,
+            oauth_authorization_server,
+            oauth_register,
+            oauth_authorize_get,
+            oauth_token,
+            make_authorize_post,
+            extract_bearer_token,
         )
+        from option_flow_sync import option_flow_sync_handler
 
         def _build_mcp_url(request, token):
             host = request.headers.get("host", f"localhost:{port}")
@@ -299,12 +304,13 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
                 raise RuntimeError("SnapTrade not configured on server")
 
             response = client.authentication.register_snap_trade_user(user_id=email)
-            data = response.body if hasattr(response, 'body') else response
-            if hasattr(data, 'to_dict'):
+            data = response.body if hasattr(response, "body") else response
+            if hasattr(data, "to_dict"):
                 data = data.to_dict()
             user_secret = (
-                data.get("userSecret") if isinstance(data, dict)
-                else getattr(data, 'user_secret', None)
+                data.get("userSecret")
+                if isinstance(data, dict)
+                else getattr(data, "user_secret", None)
             )
             if not user_secret:
                 raise RuntimeError("SnapTrade did not return a userSecret")
@@ -328,16 +334,20 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
             except Exception as e:
                 return JSONResponse({"error": str(e)}, status_code=400)
 
-            return JSONResponse({
-                "new_account": existing is None,
-                "mcp_url": _build_mcp_url(request, token),
-            })
+            return JSONResponse(
+                {
+                    "new_account": existing is None,
+                    "mcp_url": _build_mcp_url(request, token),
+                }
+            )
 
         async def health_check(request: Request):
-            return JSONResponse({
-                "status": "ok",
-                "service": "superfinance",
-            })
+            return JSONResponse(
+                {
+                    "status": "ok",
+                    "service": "superfinance",
+                }
+            )
 
         # --- Build the app ---
         # SSE transport only — streamable-http's session handling returns 400
@@ -347,18 +357,22 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
         oauth_authorize_post = make_authorize_post(find_or_create_user_token)
 
         # Non-MCP routes (signup + OAuth shim for Perplexity-style clients)
-        routes_app = Starlette(routes=[
-            Route("/", signup_page),
-            Route("/signup", signup_handler, methods=["POST"]),
-            Route("/health", health_check),
-            # OAuth 2.1 + DCR shim
-            Route("/.well-known/oauth-protected-resource", oauth_protected_resource),
-            Route("/.well-known/oauth-authorization-server", oauth_authorization_server),
-            Route("/register", oauth_register, methods=["POST"]),
-            Route("/authorize", oauth_authorize_get, methods=["GET"]),
-            Route("/authorize", oauth_authorize_post, methods=["POST"]),
-            Route("/token", oauth_token, methods=["POST"]),
-        ])
+        routes_app = Starlette(
+            routes=[
+                Route("/", signup_page),
+                Route("/signup", signup_handler, methods=["POST"]),
+                Route("/health", health_check),
+                # OAuth 2.1 + DCR shim
+                Route("/.well-known/oauth-protected-resource", oauth_protected_resource),
+                Route("/.well-known/oauth-authorization-server", oauth_authorization_server),
+                Route("/register", oauth_register, methods=["POST"]),
+                Route("/authorize", oauth_authorize_get, methods=["GET"]),
+                Route("/authorize", oauth_authorize_post, methods=["POST"]),
+                Route("/token", oauth_token, methods=["POST"]),
+                # Admin-only local-db -> Fly SQLite sync endpoint.
+                Route("/admin/option-flow/sync", option_flow_sync_handler, methods=["POST"]),
+            ]
+        )
 
         # Token-aware ASGI wrapper forwarding to SSE transport.
         class App:
@@ -381,7 +395,7 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
                                 return
                             return
 
-                        new_path = path[len(f"/{token}"):]
+                        new_path = path[len(f"/{token}") :]
                         scope = dict(scope, path=new_path or "/")
                         tok = current_user_token.set(token)
                         try:
@@ -392,7 +406,12 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
 
                     # Raw /mcp or /messages — accept Bearer auth (OAuth path).
                     # Falls through to MCP unauth'd if no token (admin / env-var usage).
-                    if path == "/mcp" or path.startswith("/mcp/") or path == "/messages" or path.startswith("/messages/"):
+                    if (
+                        path == "/mcp"
+                        or path.startswith("/mcp/")
+                        or path == "/messages"
+                        or path.startswith("/messages/")
+                    ):
                         token = extract_bearer_token(scope.get("headers", []))
                         if token and get_user(token):
                             tok = current_user_token.set(token)
@@ -404,7 +423,8 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
                         # No valid bearer — for OAuth clients, require auth
                         if token:
                             response = JSONResponse(
-                                {"error": "invalid_token"}, status_code=401,
+                                {"error": "invalid_token"},
+                                status_code=401,
                                 headers={"WWW-Authenticate": 'Bearer realm="superfinance"'},
                             )
                             await response(scope, receive, send)
@@ -425,6 +445,7 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
         print("Admin MCP: /mcp")
 
         import uvicorn
+
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         # Local development - use stdio

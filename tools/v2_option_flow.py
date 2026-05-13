@@ -7,6 +7,7 @@ from db import connect, row_to_dict
 from users import current_user_token
 
 VALID_ORDER_TYPES = {"Calls Bought", "Puts Bought", "Calls Sold", "Puts Sold"}
+GLOBAL_OPTION_FLOW_TOKEN = "__global__"
 
 
 def register_option_flow_v2(server):
@@ -66,22 +67,44 @@ def register_option_flow_v2(server):
 
         try:
             if action == "add":
-                if not symbol or not order_type or not strike or not expiry or contracts is None or not trade_date:
-                    return json.dumps({
-                        "error": "Required: symbol, order_type, strike, expiry, contracts, trade_date",
-                    }, indent=2)
+                if (
+                    not symbol
+                    or not order_type
+                    or not strike
+                    or not expiry
+                    or contracts is None
+                    or not trade_date
+                ):
+                    return json.dumps(
+                        {
+                            "error": "Required: symbol, order_type, strike, expiry, contracts, trade_date",
+                        },
+                        indent=2,
+                    )
                 if order_type not in VALID_ORDER_TYPES:
-                    return json.dumps({
-                        "error": f"order_type must be one of: {sorted(VALID_ORDER_TYPES)}",
-                    }, indent=2)
+                    return json.dumps(
+                        {
+                            "error": f"order_type must be one of: {sorted(VALID_ORDER_TYPES)}",
+                        },
+                        indent=2,
+                    )
 
                 with connect() as c:
                     cur = c.execute(
                         """INSERT INTO option_flow
                            (user_token, trade_date, order_type, symbol, strike, expiry, contracts, notes, source)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (token, trade_date, order_type, symbol.upper(), strike, expiry,
-                         int(contracts), notes, source or "manual"),
+                        (
+                            token,
+                            trade_date,
+                            order_type,
+                            symbol.upper(),
+                            strike,
+                            expiry,
+                            int(contracts),
+                            notes,
+                            source or "manual",
+                        ),
                     )
                     new_id = cur.lastrowid
                     row = c.execute("SELECT * FROM option_flow WHERE id = ?", (new_id,)).fetchone()
@@ -112,9 +135,17 @@ def register_option_flow_v2(server):
                                 """INSERT INTO option_flow
                                    (user_token, trade_date, order_type, symbol, strike, expiry, contracts, notes, source)
                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                                (token, item["trade_date"], ot, item["symbol"].upper(),
-                                 item["strike"], item["expiry"], int(item["contracts"]),
-                                 item.get("notes"), item.get("source", "manual")),
+                                (
+                                    token,
+                                    item["trade_date"],
+                                    ot,
+                                    item["symbol"].upper(),
+                                    item["strike"],
+                                    item["expiry"],
+                                    int(item["contracts"]),
+                                    item.get("notes"),
+                                    item.get("source", "manual"),
+                                ),
                             )
                             inserted += 1
                         except Exception as e:
@@ -130,10 +161,14 @@ def register_option_flow_v2(server):
                     return json.dumps({"error": "id is required"}, indent=2)
                 fields, params = [], []
                 for col, val in [
-                    ("trade_date", trade_date), ("order_type", order_type),
-                    ("symbol", symbol.upper() if symbol else None), ("strike", strike),
-                    ("expiry", expiry), ("contracts", contracts),
-                    ("notes", notes), ("source", source),
+                    ("trade_date", trade_date),
+                    ("order_type", order_type),
+                    ("symbol", symbol.upper() if symbol else None),
+                    ("strike", strike),
+                    ("expiry", expiry),
+                    ("contracts", contracts),
+                    ("notes", notes),
+                    ("source", source),
                 ]:
                     if val is not None:
                         if col == "order_type" and val not in VALID_ORDER_TYPES:
@@ -171,16 +206,17 @@ def register_option_flow_v2(server):
                     return json.dumps({"error": "id is required"}, indent=2)
                 with connect() as c:
                     row = c.execute(
-                        "SELECT * FROM option_flow WHERE id = ? AND user_token = ?",
-                        (id, token),
+                        """SELECT * FROM option_flow
+                           WHERE id = ? AND user_token IN (?, ?)""",
+                        (id, token, GLOBAL_OPTION_FLOW_TOKEN),
                     ).fetchone()
                 if not row:
                     return json.dumps({"error": f"no trade with id={id}"}, indent=2)
                 return json.dumps({"success": True, "trade": row_to_dict(row)}, indent=2)
 
             elif action == "list":
-                where = ["user_token = ?"]
-                params = [token]
+                where = ["user_token IN (?, ?)"]
+                params = [token, GLOBAL_OPTION_FLOW_TOKEN]
                 if symbol:
                     where.append("symbol = ?")
                     params.append(symbol.upper())
@@ -208,18 +244,24 @@ def register_option_flow_v2(server):
                         f"SELECT COUNT(*) AS n FROM option_flow WHERE {' AND '.join(where)}",
                         params[:-1],  # exclude the LIMIT param
                     ).fetchone()["n"]
-                return json.dumps({
-                    "success": True,
-                    "count": len(rows_),
-                    "total_matching": total,
-                    "trades": [row_to_dict(r) for r in rows_],
-                }, indent=2)
+                return json.dumps(
+                    {
+                        "success": True,
+                        "count": len(rows_),
+                        "total_matching": total,
+                        "trades": [row_to_dict(r) for r in rows_],
+                    },
+                    indent=2,
+                )
 
             elif action == "clear":
                 if source != "CONFIRM_DELETE_ALL":
-                    return json.dumps({
-                        "error": "destructive — pass source='CONFIRM_DELETE_ALL' to confirm",
-                    }, indent=2)
+                    return json.dumps(
+                        {
+                            "error": "destructive — pass source='CONFIRM_DELETE_ALL' to confirm",
+                        },
+                        indent=2,
+                    )
                 with connect() as c:
                     cur = c.execute(
                         "DELETE FROM option_flow WHERE user_token = ?",
@@ -228,10 +270,13 @@ def register_option_flow_v2(server):
                 return json.dumps({"success": True, "deleted": cur.rowcount}, indent=2)
 
             else:
-                return json.dumps({
-                    "error": f"unknown action: {action}",
-                    "valid": ["add", "add_bulk", "update", "remove", "get", "list", "clear"],
-                }, indent=2)
+                return json.dumps(
+                    {
+                        "error": f"unknown action: {action}",
+                        "valid": ["add", "add_bulk", "update", "remove", "get", "list", "clear"],
+                    },
+                    indent=2,
+                )
 
         except Exception as e:
             return json.dumps({"error": str(e)}, indent=2)

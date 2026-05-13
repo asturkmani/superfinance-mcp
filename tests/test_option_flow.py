@@ -51,13 +51,20 @@ def call(fn, **kwargs):
 
 # ---------------------------------------------------------------------------
 
+
 class TestOptionFlowAdd:
 
     def test_add_basic(self, tool_fn, user_token):
-        r = call(tool_fn, action="add",
-                 symbol="AMZN", order_type="Calls Bought",
-                 strike="270C", expiry="2026-06-05",
-                 contracts=5000, trade_date="2026-05-04 10:37")
+        r = call(
+            tool_fn,
+            action="add",
+            symbol="AMZN",
+            order_type="Calls Bought",
+            strike="270C",
+            expiry="2026-06-05",
+            contracts=5000,
+            trade_date="2026-05-04 10:37",
+        )
         assert r["success"] is True
         assert r["trade"]["symbol"] == "AMZN"
         assert r["trade"]["contracts"] == 5000
@@ -65,10 +72,16 @@ class TestOptionFlowAdd:
         assert r["trade"]["id"] >= 1
 
     def test_add_validates_order_type(self, tool_fn, user_token):
-        r = call(tool_fn, action="add",
-                 symbol="AMZN", order_type="bogus",
-                 strike="270C", expiry="2026-06-05",
-                 contracts=5000, trade_date="2026-05-04 10:37")
+        r = call(
+            tool_fn,
+            action="add",
+            symbol="AMZN",
+            order_type="bogus",
+            strike="270C",
+            expiry="2026-06-05",
+            contracts=5000,
+            trade_date="2026-05-04 10:37",
+        )
         assert "error" in r
 
     def test_add_requires_fields(self, tool_fn, user_token):
@@ -76,39 +89,73 @@ class TestOptionFlowAdd:
         assert "error" in r
 
     def test_add_no_user_context(self, tool_fn):
-        r = call(tool_fn, action="add",
-                 symbol="AMZN", order_type="Calls Bought",
-                 strike="270C", expiry="2026-06-05",
-                 contracts=5000, trade_date="2026-05-04 10:37")
+        r = call(
+            tool_fn,
+            action="add",
+            symbol="AMZN",
+            order_type="Calls Bought",
+            strike="270C",
+            expiry="2026-06-05",
+            contracts=5000,
+            trade_date="2026-05-04 10:37",
+        )
         assert "error" in r
 
     def test_symbol_uppercased(self, tool_fn, user_token):
-        r = call(tool_fn, action="add",
-                 symbol="amzn", order_type="Calls Bought",
-                 strike="270C", expiry="2026-06-05",
-                 contracts=5000, trade_date="2026-05-04 10:37")
+        r = call(
+            tool_fn,
+            action="add",
+            symbol="amzn",
+            order_type="Calls Bought",
+            strike="270C",
+            expiry="2026-06-05",
+            contracts=5000,
+            trade_date="2026-05-04 10:37",
+        )
         assert r["trade"]["symbol"] == "AMZN"
 
 
 class TestOptionFlowBulk:
 
     def test_add_bulk(self, tool_fn, user_token):
-        rows = json.dumps([
-            {"symbol": "AMZN", "order_type": "Calls Bought", "strike": "270C",
-             "expiry": "2026-06-05", "contracts": 5000, "trade_date": "2026-05-04 10:37"},
-            {"symbol": "TSLA", "order_type": "Puts Bought", "strike": "250P",
-             "expiry": "2026-06-18", "contracts": 2500, "trade_date": "2026-05-04 10:12"},
-        ])
+        rows = json.dumps(
+            [
+                {
+                    "symbol": "AMZN",
+                    "order_type": "Calls Bought",
+                    "strike": "270C",
+                    "expiry": "2026-06-05",
+                    "contracts": 5000,
+                    "trade_date": "2026-05-04 10:37",
+                },
+                {
+                    "symbol": "TSLA",
+                    "order_type": "Puts Bought",
+                    "strike": "250P",
+                    "expiry": "2026-06-18",
+                    "contracts": 2500,
+                    "trade_date": "2026-05-04 10:12",
+                },
+            ]
+        )
         r = call(tool_fn, action="add_bulk", rows=rows)
         assert r["success"] is True
         assert r["inserted"] == 2
 
     def test_bulk_partial_failures(self, tool_fn, user_token):
-        rows = json.dumps([
-            {"symbol": "AMZN", "order_type": "Calls Bought", "strike": "270C",
-             "expiry": "2026-06-05", "contracts": 5000, "trade_date": "2026-05-04 10:37"},
-            {"symbol": "BAD", "order_type": "Invalid Type"},
-        ])
+        rows = json.dumps(
+            [
+                {
+                    "symbol": "AMZN",
+                    "order_type": "Calls Bought",
+                    "strike": "270C",
+                    "expiry": "2026-06-05",
+                    "contracts": 5000,
+                    "trade_date": "2026-05-04 10:37",
+                },
+                {"symbol": "BAD", "order_type": "Invalid Type"},
+            ]
+        )
         r = call(tool_fn, action="add_bulk", rows=rows)
         assert r["inserted"] == 1
         assert len(r["errors"]) == 1
@@ -127,8 +174,16 @@ class TestOptionFlowQuery:
             ("TSLA", "Calls Bought", "300C", "2026-06-21", 1000, "2026-05-03 09:00"),
             ("AMZN", "Calls Bought", "315C", "2026-08-21", 3000, "2026-05-01 13:55"),
         ]:
-            call(fn, action="add", symbol=sym, order_type=ot, strike=strike,
-                 expiry=exp, contracts=c, trade_date=d)
+            call(
+                fn,
+                action="add",
+                symbol=sym,
+                order_type=ot,
+                strike=strike,
+                expiry=exp,
+                contracts=c,
+                trade_date=d,
+            )
 
     def test_list_all(self, tool_fn, user_token):
         self._seed(tool_fn)
@@ -149,8 +204,7 @@ class TestOptionFlowQuery:
 
     def test_list_filter_date_range(self, tool_fn, user_token):
         self._seed(tool_fn)
-        r = call(tool_fn, action="list",
-                 from_date="2026-05-04 00:00", to_date="2026-05-04 23:59")
+        r = call(tool_fn, action="list", from_date="2026-05-04 00:00", to_date="2026-05-04 23:59")
         assert r["count"] == 2
 
     def test_list_limit(self, tool_fn, user_token):
@@ -170,10 +224,16 @@ class TestOptionFlowQuery:
 class TestOptionFlowMutations:
 
     def _add(self, fn):
-        return call(fn, action="add",
-                    symbol="AMZN", order_type="Calls Bought",
-                    strike="270C", expiry="2026-06-05",
-                    contracts=5000, trade_date="2026-05-04 10:37")
+        return call(
+            fn,
+            action="add",
+            symbol="AMZN",
+            order_type="Calls Bought",
+            strike="270C",
+            expiry="2026-06-05",
+            contracts=5000,
+            trade_date="2026-05-04 10:37",
+        )
 
     def test_update(self, tool_fn, user_token):
         added = self._add(tool_fn)
@@ -207,9 +267,16 @@ class TestOptionFlowIsolation:
     def test_users_dont_see_each_others_trades(self, tool_fn):
         # Insert as user A
         tok_a = users_mod.current_user_token.set("user-A")
-        call(tool_fn, action="add", symbol="AMZN", order_type="Calls Bought",
-             strike="270C", expiry="2026-06-05", contracts=5000,
-             trade_date="2026-05-04 10:37")
+        call(
+            tool_fn,
+            action="add",
+            symbol="AMZN",
+            order_type="Calls Bought",
+            strike="270C",
+            expiry="2026-06-05",
+            contracts=5000,
+            trade_date="2026-05-04 10:37",
+        )
         users_mod.current_user_token.reset(tok_a)
 
         # Switch to user B — should see nothing
@@ -224,18 +291,108 @@ class TestOptionFlowIsolation:
 class TestOptionFlowClear:
 
     def test_clear_requires_confirm(self, tool_fn, user_token):
-        call(tool_fn, action="add", symbol="AMZN", order_type="Calls Bought",
-             strike="270C", expiry="2026-06-05", contracts=5000,
-             trade_date="2026-05-04 10:37")
+        call(
+            tool_fn,
+            action="add",
+            symbol="AMZN",
+            order_type="Calls Bought",
+            strike="270C",
+            expiry="2026-06-05",
+            contracts=5000,
+            trade_date="2026-05-04 10:37",
+        )
         r = call(tool_fn, action="clear")
         assert "error" in r
         # Still there
         assert call(tool_fn, action="list")["count"] == 1
 
     def test_clear_with_confirm(self, tool_fn, user_token):
-        call(tool_fn, action="add", symbol="AMZN", order_type="Calls Bought",
-             strike="270C", expiry="2026-06-05", contracts=5000,
-             trade_date="2026-05-04 10:37")
+        call(
+            tool_fn,
+            action="add",
+            symbol="AMZN",
+            order_type="Calls Bought",
+            strike="270C",
+            expiry="2026-06-05",
+            contracts=5000,
+            trade_date="2026-05-04 10:37",
+        )
         r = call(tool_fn, action="clear", source="CONFIRM_DELETE_ALL")
         assert r["deleted"] == 1
         assert call(tool_fn, action="list")["count"] == 0
+
+
+class TestOptionFlowGlobalRows:
+
+    def test_all_users_can_see_synced_global_rows(self, tool_fn):
+        with db_mod.connect() as c:
+            c.execute(
+                """INSERT INTO option_flow
+                   (user_token, trade_date, order_type, symbol, strike, expiry, contracts, source, sync_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "__global__",
+                    "2026-05-08",
+                    "Puts Sold",
+                    "WOLF",
+                    "45.0",
+                    "2026-06-18",
+                    900,
+                    "jamesbulltard",
+                    "global-row-1",
+                ),
+            )
+
+        tok_a = users_mod.current_user_token.set("user-A")
+        try:
+            a = call(tool_fn, action="list", symbol="WOLF")
+            assert a["count"] == 1
+            assert a["trades"][0]["user_token"] == "__global__"
+            global_id = a["trades"][0]["id"]
+            got = call(tool_fn, action="get", id=global_id)
+            assert got["trade"]["symbol"] == "WOLF"
+        finally:
+            users_mod.current_user_token.reset(tok_a)
+
+        tok_b = users_mod.current_user_token.set("user-B")
+        try:
+            b = call(tool_fn, action="list", symbol="WOLF")
+            assert b["count"] == 1
+            assert b["trades"][0]["source"] == "jamesbulltard"
+        finally:
+            users_mod.current_user_token.reset(tok_b)
+
+    def test_user_clear_does_not_delete_global_rows(self, tool_fn, user_token):
+        call(
+            tool_fn,
+            action="add",
+            symbol="AMZN",
+            order_type="Calls Bought",
+            strike="270C",
+            expiry="2026-06-05",
+            contracts=5000,
+            trade_date="2026-05-04 10:37",
+        )
+        with db_mod.connect() as c:
+            c.execute(
+                """INSERT INTO option_flow
+                   (user_token, trade_date, order_type, symbol, strike, expiry, contracts, source, sync_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "__global__",
+                    "2026-05-08",
+                    "Puts Sold",
+                    "WOLF",
+                    "45.0",
+                    "2026-06-18",
+                    900,
+                    "jamesbulltard",
+                    "global-row-1",
+                ),
+            )
+
+        r = call(tool_fn, action="clear", source="CONFIRM_DELETE_ALL")
+        assert r["deleted"] == 1
+        remaining = call(tool_fn, action="list")
+        assert remaining["count"] == 1
+        assert remaining["trades"][0]["user_token"] == "__global__"
