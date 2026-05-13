@@ -54,6 +54,8 @@ def _row_to_payload(row: sqlite3.Row) -> dict[str, Any]:
         except Exception:
             pass
 
+    strike = row["strike"] if row["strike"] is not None else strike_label
+
     return {
         "local_id": row["id"],
         "trade_datetime": row["trade_datetime"],
@@ -61,7 +63,7 @@ def _row_to_payload(row: sqlite3.Row) -> dict[str, Any]:
         "order_type": row["order_type"],
         "action": row["action"],
         "symbol": row["symbol"],
-        "strike": row["strike"],
+        "strike": strike,
         "option_type": row["option_type"],
         "strike_label": strike_label,
         "expiry": row["expiry"],
