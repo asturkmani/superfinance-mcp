@@ -16,6 +16,7 @@ wheels/
 # Local data
 data/*.db
 data/*.json
+.data/
 
 # Completion reports
 *_COMPLETION.md

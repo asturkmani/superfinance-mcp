@@ -16,6 +16,7 @@ from users import current_user_token, get_user, update_user
 MINOR_CURRENCIES = {
     "GBX": ("GBP", 100),  # British pence -> pounds
     "GBx": ("GBP", 100),
+    "GBp": ("GBP", 100),
     "ILA": ("ILS", 100),  # Israeli agorot -> shekels
 }
 
@@ -99,6 +100,7 @@ def _enrich_positions(positions: list, base_currency: str) -> tuple[list, float]
 
     # Batch-fetch live prices
     live_prices = {}
+    live_currencies = {}
     if symbols:
         try:
             tickers = yf.Tickers(" ".join(symbols))
@@ -108,10 +110,16 @@ def _enrich_positions(positions: list, base_currency: str) -> tuple[list, float]
                     price = info.get("regularMarketPrice") or info.get("previousClose")
                     if price:
                         live_prices[sym] = float(price)
+                    if info.get("currency"):
+                        live_currencies[sym] = info.get("currency")
                 except Exception:
                     pass
         except Exception:
             pass
+
+    for ccy in live_currencies.values():
+        if ccy and ccy != base_currency:
+            currencies_needed.add(ccy)
 
     # Batch-fetch FX rates (handling minor currencies like GBX -> GBP)
     fx_rates = {}
@@ -156,7 +164,7 @@ def _enrich_positions(positions: list, base_currency: str) -> tuple[list, float]
     for pos in positions:
         sym = pos.get("symbol")
         units = pos.get("units") or 0
-        ccy = pos.get("currency") or base_currency
+        ccy = live_currencies.get(sym) or pos.get("currency") or base_currency
 
         # Price priority: Yahoo Finance > manual_price > cost_price
         price_source = "unknown"
@@ -173,8 +181,9 @@ def _enrich_positions(positions: list, base_currency: str) -> tuple[list, float]
             price_source = "cost"
 
         avg_cost = pos.get("average_purchase_price") or 0
+        additional_cost = pos.get("additional_cost") or 0
         market_value = round(units * current_price, 2)
-        cost_basis = round(units * avg_cost, 2)
+        cost_basis = round((units * avg_cost) + additional_cost, 2)
         unrealised_pnl = round(market_value - cost_basis, 2)
         unrealised_pnl_pct = round((unrealised_pnl / cost_basis) * 100, 2) if cost_basis else 0.0
 
@@ -454,6 +463,7 @@ def register_snaptrade_v2(server):
         description: Optional[str] = None,
         units: Optional[float] = None,
         cost_price: Optional[float] = None,
+        additional_cost: Optional[float] = None,
         manual_price: Optional[float] = None,
         notes: Optional[str] = None,
     ) -> str:
@@ -488,6 +498,7 @@ def register_snaptrade_v2(server):
             description: Human-readable label (for add_manual/update_manual, e.g. "Pension VOO", "Loan to X")
             units: Number of units (for add_manual/update_manual)
             cost_price: Average cost per unit (for add_manual/update_manual)
+            additional_cost: Extra total cost basis not captured by cost_price * units
             manual_price: Manual price override, used when no symbol or Yahoo fails (for add_manual/update_manual)
 
         Examples:
@@ -621,6 +632,7 @@ def register_snaptrade_v2(server):
                             "units": h.get("units") or 1,
                             "price": price_fallback,
                             "average_purchase_price": h.get("cost_price"),
+                            "additional_cost": h.get("additional_cost") or 0,
                             "currency": h.get("currency") or base_ccy,
                             "_account_name": h.get("account_name", "Manual"),
                             "_id": h["id"],
@@ -782,6 +794,7 @@ def register_snaptrade_v2(server):
                     "units": float(units),
                     "currency": currency.upper(),
                     "cost_price": float(cost_price) if cost_price is not None else None,
+                    "additional_cost": float(additional_cost) if additional_cost is not None else None,
                     "manual_price": float(manual_price) if manual_price is not None else None,
                     "account_name": account_name or "Manual",
                     "notes": notes,
@@ -817,6 +830,8 @@ def register_snaptrade_v2(server):
                     target["currency"] = currency.upper()
                 if cost_price is not None:
                     target["cost_price"] = float(cost_price)
+                if additional_cost is not None:
+                    target["additional_cost"] = float(additional_cost)
                 if manual_price is not None:
                     target["manual_price"] = float(manual_price)
                 if account_name is not None:

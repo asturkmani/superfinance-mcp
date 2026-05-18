@@ -315,6 +315,25 @@ class TestManualHoldings:
         finally:
             users_mod.current_user_token.reset(tok)
 
+    def test_add_holding_with_additional_cost(self, tmp_data_dir):
+        token = users_mod.create_user("extra@test.com", "uid-extra", "secret-extra")
+        tok = users_mod.current_user_token.set(token)
+        try:
+            result = call_tool(
+                action="add_manual", description="Private round",
+                symbol="SPAX.PVT", units=103, currency="USD",
+                cost_price=97, additional_cost=5003.20,
+            )
+            assert result["success"] is True
+            h = result["holding"]
+            assert h["cost_price"] == 97
+            assert h["additional_cost"] == 5003.20
+
+            user = users_mod.get_user(token)
+            assert user["manual_holdings"][0]["additional_cost"] == 5003.20
+        finally:
+            users_mod.current_user_token.reset(tok)
+
     def test_add_holding_fixed_value(self, tmp_data_dir):
         token = users_mod.create_user("f@test.com", "uid-f", "secret-f")
         tok = users_mod.current_user_token.set(token)
