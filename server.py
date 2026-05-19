@@ -24,7 +24,7 @@ yfinance_server = FastMCP(
 
 Financial data and brokerage integration tools.
 
-## Tools (3 tools)
+## Tools
 
 ### 1. market — Yahoo Finance market data
 
@@ -168,6 +168,52 @@ option_flow(action="add", symbol="AMZN", order_type="Calls Bought",
             trade_date="2026-05-04 10:37")
 option_flow(action="list", symbol="AMZN", limit=20)
 option_flow(action="list", from_date="2026-05-01", order_type="Calls Bought")
+```
+
+### 8. momentum_group_scan — Finviz group momentum rank
+
+**momentum_group_scan(group, ...)**: Rank Finviz `Industry` or `Sector` groups by momentum.
+
+Select-style options:
+- **group**: `"Industry"` or `"Sector"`
+- **sort_by**: `"score"`, `"perf_week"`, `"perf_month"`, `"perf_quarter"`, `"perf_half"`, `"perf_year"`
+
+Recommended defaults:
+- `group="Industry"`
+- `limit=15`
+- `sort_by="score"`
+- `descending=True`
+
+Examples:
+```
+momentum_group_scan(group="Industry", limit=15, sort_by="score")
+momentum_group_scan(group="Sector", limit=11, sort_by="perf_month")
+```
+
+### 9. momentum_stock_scan — Finviz stock leaders within group
+
+**momentum_stock_scan(industry|sector, ...)**: Find leading stocks in a target Finviz industry/sector.
+
+Use exactly one group filter:
+- **industry**: e.g. `"Oil & Gas Drilling"`
+- **sector**: e.g. `"Energy"`
+
+Select-style options:
+- **market_cap**: `"all"`, `"large"`, `"mid"`, `"small"`, `"micro"`, `"nano"`
+- **sort_by**: `"score"`, `"perf_week"`, `"perf_month"`, `"perf_quarter"`, `"perf_half"`, `"perf_year"`
+
+Recommended defaults:
+- `market_cap="large"`
+- `min_price=5.0`
+- `min_avg_volume=500000`
+- `limit=15`
+- `sort_by="score"`
+- `descending=True`
+
+Examples:
+```
+momentum_stock_scan(industry="Oil & Gas Drilling", market_cap="large", min_price=5, min_avg_volume=500000)
+momentum_stock_scan(sector="Technology", market_cap="mid", limit=20)
 ```
 """,
 )
