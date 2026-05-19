@@ -1,0 +1,19 @@
+name: Sync Option Flow Token to Fly
+
+on:
+  workflow_dispatch:
+
+jobs:
+  set-fly-secret:
+    name: Set Fly option-flow sync token
+    runs-on: ubuntu-latest
+    steps:
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Set OPTION_FLOW_SYNC_TOKEN on Fly
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          OPTION_FLOW_SYNC_TOKEN: ${{ secrets.OPTION_FLOW_SYNC_TOKEN }}
+        run: |
+          test -n "$OPTION_FLOW_SYNC_TOKEN"
+          flyctl secrets set OPTION_FLOW_SYNC_TOKEN="$OPTION_FLOW_SYNC_TOKEN" --app superfinance-mcp
