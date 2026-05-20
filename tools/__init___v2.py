@@ -9,6 +9,7 @@ from tools.v2_watchlist import register_watchlist_v2
 from tools.v2_x_accounts import register_x_accounts_v2
 from tools.v2_option_flow import register_option_flow_v2
 from tools.v2_momentum import register_momentum_v2
+from tools.v2_themes import register_themes_v2
 
 
 def register_all_tools_v2(server):
@@ -22,6 +23,7 @@ def register_all_tools_v2(server):
     register_x_accounts_v2(server)
     register_option_flow_v2(server)
     register_momentum_v2(server)
+    register_themes_v2(server)
 
 
 __all__ = ["register_all_tools_v2"]

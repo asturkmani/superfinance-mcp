@@ -170,7 +170,25 @@ option_flow(action="list", symbol="AMZN", limit=20)
 option_flow(action="list", from_date="2026-05-01", order_type="Calls Bought")
 ```
 
-### 8. momentum_group_scan — Finviz group momentum rank
+### 8. themes — Theme registry with mapped tickers
+
+**themes(action, ...)**: Source of truth for investable themes used by X Signal, watchlist grouping, and daily canvas summaries.
+
+Actions:
+- **list**: List themes, ticker counts, and all mapped tickers
+- **get**: Get one theme with mapped tickers
+- **upsert_theme / remove_theme**: Manage themes
+- **add_ticker / remove_ticker / set_tickers**: Manage ticker membership
+
+Examples:
+```
+themes(action="upsert_theme", name="Packaging & Test", description="AI advanced packaging bottleneck")
+themes(action="add_ticker", name="Packaging & Test", ticker="AMKR", note="OSAT exposure")
+themes(action="list")
+themes(action="get", name="Packaging & Test")
+```
+
+### 9. momentum_group_scan — Finviz group momentum rank
 
 **momentum_group_scan(group, ...)**: Rank Finviz `Industry` or `Sector` groups by momentum.
 
@@ -190,7 +208,7 @@ momentum_group_scan(group="Industry", limit=15, sort_by="score")
 momentum_group_scan(group="Sector", limit=11, sort_by="perf_month")
 ```
 
-### 9. momentum_stock_scan — Finviz stock leaders within group
+### 10. momentum_stock_scan — Finviz stock leaders within group
 
 **momentum_stock_scan(industry|sector, ...)**: Find leading stocks in a target Finviz industry/sector.
 
