@@ -173,20 +173,26 @@ option_flow(action="list", symbol="AMZN", limit=20)
 option_flow(action="list", from_date="2026-05-01", order_type="Calls Bought")
 ```
 
-### 8. themes — Theme registry with mapped tickers
+### 8. themes — Theme/ticker graph registry
 
 **themes(action, ...)**: Source of truth for investable themes used by X Signal, watchlist grouping, and daily canvas summaries.
+Models themes and tickers as a graph: themes can contain sub-themes, themes can contain tickers, and tickers can exist standalone.
 
 Actions:
 - **list**: List themes, ticker counts, and all mapped tickers
+- **graph**: Return theme/ticker graph nodes and edges
 - **get**: Get one theme with mapped tickers
-- **upsert_theme / remove_theme**: Manage themes
+- **upsert_theme / remove_theme**: Manage themes; `upsert_theme` accepts optional `parent_theme`
+- **set_parent / remove_parent**: Make a theme a sub-theme of another theme, or make it top-level again
 - **add_ticker / remove_ticker / set_tickers**: Manage ticker membership
 
 Examples:
 ```
 themes(action="upsert_theme", name="Packaging & Test", description="AI advanced packaging bottleneck")
+themes(action="upsert_theme", name="MLCC", parent_theme="Passive Components")
+themes(action="set_parent", name="Packaging & Test", parent_theme="AI Capex")
 themes(action="add_ticker", name="Packaging & Test", ticker="AMKR", note="OSAT exposure")
+themes(action="graph")
 themes(action="list")
 themes(action="get", name="Packaging & Test")
 ```

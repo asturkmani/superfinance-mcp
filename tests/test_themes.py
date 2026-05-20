@@ -79,6 +79,33 @@ class TestThemes:
         assert r["success"] is True
         assert [x["ticker"] for x in r["theme"]["tickers"]] == ["6762.T", "KYOCY"]
 
+    def test_theme_can_have_parent(self, authenticated):
+        r = call_tool(action="upsert_theme", name="MLCC", parent_theme="Passive Components")
+        assert r["success"] is True
+        assert r["theme"]["parent_theme"] == "Passive Components"
+        parent = call_tool(action="get", name="Passive Components")
+        assert parent["success"] is True
+
+    def test_set_and_remove_parent(self, authenticated):
+        call_tool(action="upsert_theme", name="Packaging & Test")
+        r = call_tool(action="set_parent", name="Packaging & Test", parent_theme="AI Capex")
+        assert r["theme"]["parent_theme"] == "AI Capex"
+        r = call_tool(action="remove_parent", name="Packaging & Test")
+        assert r["theme"].get("parent_theme") is None
+
+    def test_prevents_parent_cycles(self, authenticated):
+        call_tool(action="set_parent", name="MLCC", parent_theme="Passive Components")
+        r = call_tool(action="set_parent", name="Passive Components", parent_theme="MLCC")
+        assert "error" in r
+
+    def test_graph_returns_theme_and_ticker_edges(self, authenticated):
+        call_tool(action="set_parent", name="MLCC", parent_theme="Passive Components")
+        call_tool(action="add_ticker", name="MLCC", ticker="6762.T")
+        r = call_tool(action="graph")
+        assert r["success"] is True
+        assert {"from": "theme:Passive Components", "to": "theme:MLCC", "kind": "theme_contains_theme"} in r["edges"]
+        assert {"from": "theme:MLCC", "to": "ticker:6762.T", "kind": "theme_contains_ticker"} in r["edges"]
+
     def test_user_isolation(self, tmp_data_dir):
         token_a = users_mod.create_user("a@test.com", "uid-a", "secret-a")
         token_b = users_mod.create_user("b@test.com", "uid-b", "secret-b")

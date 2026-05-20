@@ -9,9 +9,12 @@ from users import current_user_token, get_user, update_user
 
 VALID_ACTIONS = [
     "list",
+    "graph",
     "get",
     "upsert_theme",
     "remove_theme",
+    "set_parent",
+    "remove_parent",
     "add_ticker",
     "remove_ticker",
     "set_tickers",
@@ -43,12 +46,31 @@ def _save_themes(token: str, themes: dict):
     update_user(token, {"themes": themes})
 
 
+def _get_watchlist(token: str) -> dict:
+    user = get_user(token)
+    return user.get("watchlist", {}) if user else {}
+
+
+def _would_create_cycle(registry: dict, child: str, parent: str) -> bool:
+    cursor = parent
+    seen = set()
+    while cursor:
+        if cursor == child:
+            return True
+        if cursor in seen:
+            return True
+        seen.add(cursor)
+        cursor = registry.get(cursor, {}).get("parent_theme")
+    return False
+
+
 def _theme_payload(name: str, entry: dict) -> dict:
     tickers = entry.get("tickers", {})
     return {
         "name": name,
         "description": entry.get("description", ""),
         "status": entry.get("status", "active"),
+        "parent_theme": entry.get("parent_theme"),
         "tickers": [
             {
                 "ticker": ticker,
@@ -63,12 +85,75 @@ def _theme_payload(name: str, entry: dict) -> dict:
     }
 
 
+def _theme_graph(token: str, registry: dict) -> dict:
+    nodes = []
+    edges = []
+    ticker_nodes = set()
+
+    for name, entry in sorted(registry.items()):
+        nodes.append({
+            "id": f"theme:{name}",
+            "kind": "theme",
+            "label": name,
+            "status": entry.get("status", "active"),
+            "description": entry.get("description", ""),
+        })
+        parent = entry.get("parent_theme")
+        if parent:
+            edges.append({
+                "from": f"theme:{parent}",
+                "to": f"theme:{name}",
+                "kind": "theme_contains_theme",
+            })
+        for ticker in sorted(entry.get("tickers", {}).keys()):
+            ticker_nodes.add(ticker)
+            edges.append({
+                "from": f"theme:{name}",
+                "to": f"ticker:{ticker}",
+                "kind": "theme_contains_ticker",
+            })
+
+    watchlist = _get_watchlist(token)
+    for ticker, entry in sorted(watchlist.items()):
+        ticker_nodes.add(ticker)
+        item_themes = entry.get("themes", []) or []
+        for theme_name in item_themes:
+            if theme_name in registry:
+                edge = {
+                    "from": f"theme:{theme_name}",
+                    "to": f"ticker:{ticker}",
+                    "kind": "theme_contains_ticker",
+                }
+                if edge not in edges:
+                    edges.append(edge)
+
+    connected_tickers = {edge["to"].replace("ticker:", "") for edge in edges if edge["kind"] == "theme_contains_ticker"}
+    for ticker in sorted(ticker_nodes):
+        nodes.append({
+            "id": f"ticker:{ticker}",
+            "kind": "ticker",
+            "label": ticker,
+            "standalone": ticker not in connected_tickers,
+            "in_watchlist": ticker in watchlist,
+        })
+
+    return {
+        "success": True,
+        "nodes": nodes,
+        "edges": edges,
+        "theme_count": len(registry),
+        "ticker_count": len(ticker_nodes),
+        "standalone_tickers": sorted(t for t in ticker_nodes if t not in connected_tickers),
+    }
+
+
 def register_themes_v2(server):
 
     @server.tool()
     def themes(
         action: str,
         name: Optional[str] = None,
+        parent_theme: Optional[str] = None,
         description: Optional[str] = None,
         status: Optional[str] = None,
         ticker: Optional[str] = None,
@@ -82,15 +167,20 @@ def register_themes_v2(server):
 
         Actions:
         - list: List all themes and ticker counts.
+        - graph: Return theme/ticker graph nodes and edges.
         - get: Get one theme with mapped tickers. Requires `name`.
-        - upsert_theme: Create or update a theme. Requires `name`.
+        - upsert_theme: Create or update a theme. Requires `name`; optional `parent_theme`.
         - remove_theme: Remove a theme. Requires `name`.
+        - set_parent: Make one theme a sub-theme of another. Requires `name` and `parent_theme`.
+        - remove_parent: Make a theme top-level again. Requires `name`.
         - add_ticker: Add one ticker to a theme. Requires `name` and `ticker`.
         - remove_ticker: Remove one ticker from a theme. Requires `name` and `ticker`.
         - set_tickers: Replace a theme's tickers. Requires `name` and comma-separated `tickers`.
 
         Examples:
             themes(action="upsert_theme", name="Packaging & Test", description="AI advanced packaging bottleneck")
+            themes(action="upsert_theme", name="MLCC", parent_theme="Passive Components")
+            themes(action="graph")
             themes(action="add_ticker", name="Packaging & Test", ticker="AMKR", note="OSAT exposure")
             themes(action="list")
             themes(action="get", name="Packaging & Test")
@@ -104,6 +194,7 @@ def register_themes_v2(server):
 
         registry = _get_themes(token)
         theme_name = _normalize_theme(name)
+        parent_name = _normalize_theme(parent_theme)
         tkr = _normalize_ticker(ticker)
 
         if action == "list":
@@ -117,6 +208,9 @@ def register_themes_v2(server):
                 },
                 indent=2,
             )
+
+        if action == "graph":
+            return json.dumps(_theme_graph(token, registry), indent=2)
 
         if not theme_name:
             return json.dumps({"error": "name is required"}, indent=2)
@@ -134,8 +228,16 @@ def register_themes_v2(server):
                 entry["description"] = description
             if status is not None:
                 entry["status"] = status
+            if parent_name is not None:
+                if parent_name == theme_name:
+                    return json.dumps({"error": "parent_theme cannot equal name"}, indent=2)
+                registry.setdefault(parent_name, {"created_at": _now_iso(), "updated_at": _now_iso(), "description": "", "status": "active", "tickers": {}})
+                if _would_create_cycle(registry, theme_name, parent_name):
+                    return json.dumps({"error": "parent_theme would create a cycle"}, indent=2)
+                entry["parent_theme"] = parent_name
             entry.setdefault("status", "active")
             entry.setdefault("description", "")
+            entry.setdefault("tickers", {})
             entry["updated_at"] = _now_iso()
             _save_themes(token, registry)
             return json.dumps(
@@ -147,11 +249,36 @@ def register_themes_v2(server):
             if theme_name not in registry:
                 return json.dumps({"error": f"{theme_name} not found"}, indent=2)
             removed = registry.pop(theme_name)
+            for entry in registry.values():
+                if entry.get("parent_theme") == theme_name:
+                    entry.pop("parent_theme", None)
             _save_themes(token, registry)
             return json.dumps(
                 {"success": True, "removed": _theme_payload(theme_name, removed)},
                 indent=2,
             )
+
+        if action == "set_parent":
+            if not parent_name:
+                return json.dumps({"error": "parent_theme is required"}, indent=2)
+            if parent_name == theme_name:
+                return json.dumps({"error": "parent_theme cannot equal name"}, indent=2)
+            registry.setdefault(theme_name, {"created_at": _now_iso(), "updated_at": _now_iso(), "description": "", "status": "active", "tickers": {}})
+            registry.setdefault(parent_name, {"created_at": _now_iso(), "updated_at": _now_iso(), "description": "", "status": "active", "tickers": {}})
+            if _would_create_cycle(registry, theme_name, parent_name):
+                return json.dumps({"error": "parent_theme would create a cycle"}, indent=2)
+            registry[theme_name]["parent_theme"] = parent_name
+            registry[theme_name]["updated_at"] = _now_iso()
+            _save_themes(token, registry)
+            return json.dumps({"success": True, "theme": _theme_payload(theme_name, registry[theme_name])}, indent=2)
+
+        if action == "remove_parent":
+            if theme_name not in registry:
+                return json.dumps({"error": f"{theme_name} not found"}, indent=2)
+            registry[theme_name].pop("parent_theme", None)
+            registry[theme_name]["updated_at"] = _now_iso()
+            _save_themes(token, registry)
+            return json.dumps({"success": True, "theme": _theme_payload(theme_name, registry[theme_name])}, indent=2)
 
         entry = registry.setdefault(theme_name, {"created_at": _now_iso(), "updated_at": _now_iso(), "description": "", "status": "active", "tickers": {}})
         entry.setdefault("tickers", {})
