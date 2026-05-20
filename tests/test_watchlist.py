@@ -55,6 +55,15 @@ class TestWatchlist:
         assert len(r["entry"]["notes"]) == 1
         assert r["entry"]["notes"][0]["text"] == "first note"
 
+    def test_add_ticker_with_theme_syncs_registry(self, authenticated):
+        r = call_tool(action="add_ticker", ticker="AMKR", theme="Packaging & Test", text="OSAT exposure")
+        assert r["success"] is True
+        assert r["entry"]["themes"] == ["Packaging & Test"]
+        token = users_mod.current_user_token.get()
+        user = users_mod.get_user(token)
+        assert "Packaging & Test" in user["themes"]
+        assert "AMKR" in user["themes"]["Packaging & Test"]["tickers"]
+
     def test_add_ticker_lowercases_to_upper(self, authenticated):
         r = call_tool(action="add_ticker", ticker="nvda")
         assert r["ticker"] == "NVDA"
@@ -75,6 +84,18 @@ class TestWatchlist:
         r = call_tool(action="add_note", ticker="NVDA", text="second")
         assert r["total_notes"] == 2
 
+    def test_add_note_with_theme_groups_existing_ticker(self, authenticated):
+        call_tool(action="add_ticker", ticker="NVDA")
+        r = call_tool(action="add_note", ticker="NVDA", text="new thesis", theme="Semiconductors")
+        assert r["themes"] == ["Semiconductors"]
+
+    def test_set_themes_replaces_ticker_groups(self, authenticated):
+        call_tool(action="add_ticker", ticker="AMKR", theme="Semiconductors")
+        r = call_tool(action="set_themes", ticker="AMKR", themes="Packaging & Test, Semiconductors")
+        assert r["themes"] == ["Packaging & Test", "Semiconductors"]
+        got = call_tool(action="get", ticker="AMKR")
+        assert got["themes"] == ["Packaging & Test", "Semiconductors"]
+
     def test_list(self, authenticated):
         call_tool(action="add_ticker", ticker="NVDA", text="n1")
         call_tool(action="add_note", ticker="AAPL", text="a1")
@@ -82,6 +103,13 @@ class TestWatchlist:
         assert r["count"] == 2
         tickers = [t["ticker"] for t in r["tickers"]]
         assert "NVDA" in tickers and "AAPL" in tickers
+
+    def test_list_grouped_by_theme(self, authenticated):
+        call_tool(action="add_ticker", ticker="MU", theme="Memory")
+        call_tool(action="add_ticker", ticker="LITE", theme="Photonics")
+        r = call_tool(action="list", group_by_theme=True)
+        assert "Memory" in r["grouped_by_theme"]
+        assert r["grouped_by_theme"]["Memory"][0]["ticker"] == "MU"
 
     def test_get(self, authenticated):
         call_tool(action="add_ticker", ticker="NVDA", text="n1")

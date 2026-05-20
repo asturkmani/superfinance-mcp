@@ -110,22 +110,25 @@ x_search(query="What are traders saying about AAPL?")
 x_search(query="Latest views on rate cuts", handles="unusual_whales,DeItaone", from_date="2026-04-01")
 ```
 
-### 5. watchlist — Ticker watchlist with research notes
+### 5. watchlist — Ticker watchlist with research notes and optional theme grouping
 
 **watchlist(action, ...)**: Track tickers with timestamped research notes (sentiment signals, options flow, tweets, etc.).
 
 Actions:
-- **list**: Show all watchlist tickers with note counts
+- **list**: Show all watchlist tickers with theme groups and note counts; set `group_by_theme=True` for grouped output
 - **get**: Get all notes for a ticker
-- **add_ticker**: Add ticker (optionally with a first note)
+- **add_ticker**: Add ticker (optionally with a first note and `theme`/`themes`)
 - **remove_ticker**: Remove ticker and all notes
-- **add_note**: Append a note (auto-dated). Also auto-creates ticker if missing.
+- **add_note**: Append a note (auto-dated). Also auto-creates ticker if missing. Optional `theme`/`themes` groups it.
+- **set_themes**: Replace a ticker's theme groups and sync membership into the `themes` registry
 - **update_note**: Edit a note
 - **remove_note**: Delete a single note
 
 Examples:
 ```
-watchlist(action="add_ticker", ticker="NVDA", text="unusual_whales bullish options flow")
+watchlist(action="add_ticker", ticker="NVDA", theme="Semiconductors", text="unusual_whales bullish options flow")
+watchlist(action="set_themes", ticker="AMKR", themes="Packaging & Test, Semiconductors")
+watchlist(action="list", group_by_theme=True)
 watchlist(action="add_note", ticker="NVDA", text="Jim Cramer went bearish today")
 watchlist(action="list")
 watchlist(action="get", ticker="NVDA")
