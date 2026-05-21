@@ -1,6 +1,7 @@
 """Option flow CRUD tool backed by SQLite."""
 
 import json
+from datetime import datetime, timedelta
 from typing import Optional
 
 from db import connect, row_to_dict
@@ -8,6 +9,308 @@ from users import current_user_token
 
 VALID_ORDER_TYPES = {"Calls Bought", "Puts Bought", "Calls Sold", "Puts Sold"}
 GLOBAL_OPTION_FLOW_TOKEN = "__global__"
+
+
+def _date_minus(date_str: str, days: int) -> str:
+    return (datetime.fromisoformat(str(date_str)[:10]) - timedelta(days=days)).date().isoformat()
+
+
+def _month_start(date_str: str) -> str:
+    return datetime.fromisoformat(str(date_str)[:10]).replace(day=1).date().isoformat()
+
+
+def _leader_signal(symbol: str, side: str, snapshots: dict[str, dict[str, dict]]) -> dict[str, str | None]:
+    metric = "bullish_score" if side == "bullish" else "bearish_score"
+    days_metric = "bullish_days" if side == "bullish" else "bearish_days"
+    day = float(snapshots.get("day", {}).get(symbol, {}).get(metric) or 0)
+    week = float(snapshots.get("week", {}).get(symbol, {}).get(metric) or 0)
+    month = float(snapshots.get("month", {}).get(symbol, {}).get(metric) or 0)
+    quarter = float(snapshots.get("quarter", {}).get(symbol, {}).get(metric) or 0)
+    week_days = int(snapshots.get("week", {}).get(symbol, {}).get(days_metric) or 0)
+    month_days = int(snapshots.get("month", {}).get(symbol, {}).get(days_metric) or 0)
+    quarter_days = int(snapshots.get("quarter", {}).get(symbol, {}).get(days_metric) or 0)
+
+    signal: dict[str, str | None] = {
+        "trendIcon": None,
+        "trendLabel": None,
+        "durationIcon": None,
+        "durationLabel": None,
+    }
+    if day and week >= 2 and week_days >= 2:
+        signal["durationIcon"] = "⚡"
+        signal["durationLabel"] = "recent flow"
+    elif quarter >= 8 and quarter_days >= 4 and month:
+        signal["durationIcon"] = "⏳"
+        signal["durationLabel"] = "long-term flow"
+
+    day_avg = day
+    week_avg = week / 7 if week else 0
+    month_avg = month / 30 if month else 0
+    has_consistency = week_days >= 2 or month_days >= 3 or quarter_days >= 4
+    if has_consistency and day_avg >= week_avg * 1.25 and week_avg >= month_avg * 1.1 and day:
+        signal["trendIcon"] = "↑"
+        signal["trendLabel"] = "increasing"
+    elif has_consistency and week_avg and day_avg <= week_avg * 0.5 and (not month_avg or week_avg <= month_avg * 0.9):
+        signal["trendIcon"] = "↓"
+        signal["trendLabel"] = "decreasing"
+    elif month_days >= 3 and month_avg:
+        rates = [rate for rate in (day_avg, week_avg, month_avg) if rate > 0]
+        if rates and max(rates) / min(rates) <= 1.8:
+            signal["trendIcon"] = "→"
+            signal["trendLabel"] = "steady"
+    return signal
+
+
+def _week_starts_ending(latest_date: str, weeks: int = 8) -> list[datetime]:
+    latest = datetime.fromisoformat(str(latest_date)[:10])
+    current_week = latest - timedelta(days=latest.weekday())
+    return [current_week - timedelta(days=7 * offset) for offset in range(weeks - 1, -1, -1)]
+
+
+def _add_weekly_bars(c, leaders: list[dict], side: str, latest_date: str, where_base: str, base_params: list, weeks: int = 8) -> None:
+    symbols = sorted({str(item.get("symbol") or "").upper() for item in leaders if item.get("symbol")})
+    if not symbols:
+        return
+    starts = _week_starts_ending(latest_date, weeks)
+    week_keys = [start.date().isoformat() for start in starts]
+    placeholders = ",".join("?" for _ in symbols)
+    side_sql = "order_type IN ('Calls Bought', 'Puts Sold')" if side == "bullish" else "order_type = 'Puts Bought'"
+    params = [*base_params, *symbols, starts[0].date().isoformat(), str(latest_date)[:10]]
+    rows = c.execute(
+        f"""
+        SELECT symbol, substr(trade_date, 1, 10) AS trade_day, count(*) AS rows
+        FROM option_flow
+        WHERE {where_base}
+          AND upper(symbol) IN ({placeholders})
+          AND date(trade_date) >= date(?)
+          AND date(trade_date) <= date(?)
+          AND {side_sql}
+        GROUP BY symbol, trade_day
+        """,
+        params,
+    ).fetchall()
+    counts: dict[str, dict[str, int]] = {symbol: {} for symbol in symbols}
+    for row in rows:
+        traded = datetime.fromisoformat(row["trade_day"])
+        week = traded - timedelta(days=traded.weekday())
+        key = week.date().isoformat()
+        if key in week_keys:
+            symbol_key = str(row["symbol"]).upper()
+            counts.setdefault(symbol_key, {})[key] = counts.setdefault(symbol_key, {}).get(key, 0) + int(row["rows"] or 0)
+    for item in leaders:
+        symbol_key = str(item.get("symbol") or "").upper()
+        item["weeklyBars"] = [
+            {
+                "weekStart": key,
+                "label": datetime.fromisoformat(key).strftime("%-m/%-d"),
+                "trades": counts.get(symbol_key, {}).get(key, 0),
+            }
+            for key in week_keys
+        ]
+
+
+def _aggregate_period(c, key: str, label: str, start: str, end: str, latest_date: str, where_base: str, base_params: list) -> dict:
+    params = [*base_params, start, end]
+    where = f"{where_base} AND date(trade_date) >= date(?) AND date(trade_date) <= date(?)"
+    row = c.execute(
+        f"""
+        SELECT count(*) AS rows, coalesce(sum(contracts), 0) AS contracts,
+               min(substr(trade_date, 1, 10)) AS start_date,
+               max(substr(trade_date, 1, 10)) AS end_date,
+               count(DISTINCT substr(trade_date, 1, 10)) AS trading_days
+        FROM option_flow
+        WHERE {where}
+        """,
+        params,
+    ).fetchone()
+    by_type = [
+        row_to_dict(r)
+        for r in c.execute(
+            f"""
+            SELECT order_type, count(*) AS rows, coalesce(sum(contracts), 0) AS contracts
+            FROM option_flow
+            WHERE {where}
+            GROUP BY order_type
+            ORDER BY rows DESC
+            """,
+            params,
+        ).fetchall()
+    ]
+    leaders = [
+        row_to_dict(r)
+        for r in c.execute(
+            f"""
+            SELECT upper(symbol) AS symbol,
+                   coalesce(sum(CASE WHEN order_type IN ('Calls Bought', 'Puts Sold') THEN 1 ELSE 0 END), 0) AS bullish_score,
+                   coalesce(sum(CASE WHEN order_type = 'Puts Bought' THEN 1 ELSE 0 END), 0) AS bearish_score,
+                   coalesce(sum(CASE WHEN order_type = 'Calls Bought' THEN 1 ELSE 0 END), 0) AS calls_bought,
+                   coalesce(sum(CASE WHEN order_type = 'Puts Bought' THEN 1 ELSE 0 END), 0) AS puts_bought,
+                   coalesce(sum(CASE WHEN order_type = 'Puts Sold' THEN 1 ELSE 0 END), 0) AS puts_sold,
+                   coalesce(sum(CASE WHEN order_type = 'Calls Sold' THEN 1 ELSE 0 END), 0) AS calls_sold,
+                   count(DISTINCT CASE WHEN order_type IN ('Calls Bought', 'Puts Sold') THEN substr(trade_date, 1, 10) END) AS bullish_days,
+                   count(DISTINCT CASE WHEN order_type = 'Puts Bought' THEN substr(trade_date, 1, 10) END) AS bearish_days,
+                   coalesce(sum(contracts), 0) AS contracts,
+                   count(*) AS rows,
+                   max(substr(trade_date, 1, 10)) AS last_seen
+            FROM option_flow
+            WHERE {where}
+            GROUP BY upper(symbol)
+            HAVING bullish_score > 0 OR bearish_score > 0
+            ORDER BY rows DESC
+            LIMIT 200
+            """,
+            params,
+        ).fetchall()
+    ]
+    top_trades = [
+        row_to_dict(r)
+        for r in c.execute(
+            f"""
+            SELECT upper(symbol) AS symbol, order_type,
+                   coalesce(strike_label, strike) AS strike_label,
+                   expiry, contracts, substr(trade_date, 1, 10) AS trade_date
+            FROM option_flow
+            WHERE {where}
+            ORDER BY contracts DESC
+            LIMIT 12
+            """,
+            params,
+        ).fetchall()
+    ]
+    bullish = sorted((dict(x) for x in leaders), key=lambda x: (x["bullish_score"], x["rows"], x["contracts"]), reverse=True)[:20]
+    bearish = sorted((dict(x) for x in leaders), key=lambda x: (x["bearish_score"], x["rows"], x["contracts"]), reverse=True)[:20]
+    _add_weekly_bars(c, bullish, "bullish", latest_date, where_base, base_params)
+    _add_weekly_bars(c, bearish, "bearish", latest_date, where_base, base_params)
+    return {
+        "key": key,
+        "label": label,
+        "summary": {
+            "rows": row["rows"] or 0,
+            "rowsLabel": f"{int(row['rows'] or 0):,}",
+            "contracts": row["contracts"] or 0,
+            "contractsLabel": f"{int(row['contracts'] or 0):,}",
+            "startDate": row["start_date"],
+            "endDate": row["end_date"],
+            "tradingDays": row["trading_days"] or 0,
+        },
+        "byType": by_type,
+        "leaders": leaders[:20],
+        "bullishLeaders": bullish,
+        "bearishLeaders": bearish,
+        "topTrades": top_trades,
+    }
+
+
+def _build_aggregate(c, token: str, from_date: Optional[str], to_date: Optional[str], symbol: Optional[str]) -> dict:
+    where_base = "user_token IN (?, ?)"
+    base_params: list = [token, GLOBAL_OPTION_FLOW_TOKEN]
+    if symbol:
+        where_base += " AND upper(symbol) = ?"
+        base_params.append(symbol.upper())
+    latest_row = c.execute(
+        f"SELECT max(substr(trade_date, 1, 10)) AS latest_date FROM option_flow WHERE {where_base}",
+        base_params,
+    ).fetchone()
+    latest_date = latest_row["latest_date"] if latest_row else None
+    if not latest_date:
+        return {"success": True, "latestDate": None, "summary": {"rows": 0, "contracts": 0}, "periods": {}}
+
+    end = (to_date or latest_date)[:10]
+    day = (from_date or end)[:10] if from_date and to_date and from_date[:10] == to_date[:10] else end
+    specs = [
+        ("day", "Day", day, day),
+        ("week", "Week", _date_minus(end, 6), end),
+        ("month", "Month", _month_start(end), end),
+        ("past_30_days", "Past 30 Days", _date_minus(end, 29), end),
+        ("quarter", "Past Quarter", _date_minus(end, 89), end),
+    ]
+    periods = {
+        key: _aggregate_period(c, key, label, start, stop, end, where_base, base_params)
+        for key, label, start, stop in specs
+    }
+    snapshots = {key: {str(x.get("symbol")): x for x in period.get("leaders", [])} for key, period in periods.items()}
+    for period in periods.values():
+        for side, collection in (("bullish", period["bullishLeaders"]), ("bearish", period["bearishLeaders"])):
+            for item in collection:
+                item["signal"] = _leader_signal(item["symbol"], side, snapshots)
+
+    day_period = periods["day"]
+    week_period = periods["week"]
+    month_period = periods["month"]
+    quarter_period = periods["quarter"]
+    week_by_symbol = {x["symbol"]: x for x in week_period.get("leaders", [])}
+    month_by_symbol = {x["symbol"]: x for x in month_period.get("leaders", [])}
+    quarter_by_symbol = {x["symbol"]: x for x in quarter_period.get("leaders", [])}
+    momentum_ramp = []
+    for symbol_key, w in list(week_by_symbol.items())[:20]:
+        q = quarter_by_symbol.get(symbol_key, {})
+        m = month_by_symbol.get(symbol_key, {})
+        momentum_ramp.append(
+            {
+                "symbol": symbol_key,
+                "net_per_day_7d": round((w.get("bullish_score", 0) - w.get("bearish_score", 0)) / 7, 2),
+                "net_per_day_28d": round((m.get("bullish_score", 0) - m.get("bearish_score", 0)) / 30, 2),
+                "net_per_day_84d": round((q.get("bullish_score", 0) - q.get("bearish_score", 0)) / 90, 2),
+                "bull_ratio_7d": round(w.get("bullish_score", 0) / max(1, w.get("rows", 0)), 2),
+                "gross_7d": w.get("contracts", 0),
+            }
+        )
+    momentum_ramp.sort(key=lambda x: x["net_per_day_7d"], reverse=True)
+
+    flow_fading = []
+    for symbol_key, m in list(month_by_symbol.items())[:20]:
+        w = week_by_symbol.get(symbol_key, {})
+        q = quarter_by_symbol.get(symbol_key, {})
+        net_7d = round((w.get("bullish_score", 0) - w.get("bearish_score", 0)) / 7, 2)
+        net_30d = round((m.get("bullish_score", 0) - m.get("bearish_score", 0)) / 30, 2)
+        if net_30d <= 0 or net_7d >= net_30d * 0.5:
+            continue
+        flow_fading.append(
+            {
+                "symbol": symbol_key,
+                "net_per_day_7d": net_7d,
+                "net_per_day_28d": net_30d,
+                "net_per_day_84d": round((q.get("bullish_score", 0) - q.get("bearish_score", 0)) / 90, 2),
+                "gross_30d": m.get("contracts", 0),
+            }
+        )
+    flow_fading.sort(key=lambda x: x["net_per_day_28d"] - x["net_per_day_7d"], reverse=True)
+
+    return {
+        "success": True,
+        "source": "Superfinance option_flow aggregate",
+        "latestDate": end,
+        "summary": day_period.get("summary", {}),
+        "byType": day_period.get("byType", []),
+        "topTrades": day_period.get("topTrades", []),
+        "symbolTotals": day_period.get("leaders", [])[:12],
+        "periods": periods,
+        "defaultPeriod": "day",
+        "momentumRamp": momentum_ramp[:8],
+        "flowFading": flow_fading[:8],
+        "longAccumulation": [
+            {
+                "symbol": x["symbol"],
+                "score": x.get("bullish_score", 0),
+                "net_contracts": x.get("contracts", 0),
+                "active_days": x.get("bullish_days", 0),
+                "active_weeks": sum(1 for b in x.get("weeklyBars", []) if b.get("trades")),
+                "bull_week_rate": None,
+                "net_gross_ratio": None,
+            }
+            for x in quarter_period.get("bullishLeaders", [])[:8]
+        ],
+        "shortBullishSlams": [
+            {
+                "symbol": x["symbol"],
+                "short_gross": x.get("contracts", 0),
+                "bull_ratio": round(x.get("bullish_score", 0) / max(1, x.get("rows", 0)), 2),
+                "net": x.get("bullish_score", 0) - x.get("bearish_score", 0),
+            }
+            for x in day_period.get("bullishLeaders", [])
+            if x.get("bullish_score", 0) >= 2 and x.get("bullish_score", 0) > x.get("bearish_score", 0)
+        ][:8],
+    }
 
 
 def register_option_flow_v2(server):
@@ -50,6 +353,7 @@ def register_option_flow_v2(server):
         - remove: Delete a trade by id
         - get: Get a single trade by id
         - list: List trades. Filter by symbol/order_type/from_date/to_date.
+        - aggregate: Full leader/period summary for canvas/digest. Optional symbol/from_date/to_date.
         - clear: Delete all your trades (with confirm via source="CONFIRM_DELETE_ALL")
 
         Examples:
@@ -254,6 +558,11 @@ def register_option_flow_v2(server):
                     indent=2,
                 )
 
+            elif action == "aggregate":
+                with connect() as c:
+                    result = _build_aggregate(c, token, from_date, to_date, symbol)
+                return json.dumps(result, indent=2)
+
             elif action == "clear":
                 if source != "CONFIRM_DELETE_ALL":
                     return json.dumps(
@@ -273,7 +582,7 @@ def register_option_flow_v2(server):
                 return json.dumps(
                     {
                         "error": f"unknown action: {action}",
-                        "valid": ["add", "add_bulk", "update", "remove", "get", "list", "clear"],
+                        "valid": ["add", "add_bulk", "update", "remove", "get", "list", "aggregate", "clear"],
                     },
                     indent=2,
                 )

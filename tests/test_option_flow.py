@@ -220,6 +220,52 @@ class TestOptionFlowQuery:
         r = call(tool_fn, action="get", id=first_id)
         assert r["trade"]["id"] == first_id
 
+    def test_aggregate_uses_full_window_not_list_limit(self, tool_fn, user_token):
+        for i in range(60):
+            call(
+                tool_fn,
+                action="add",
+                symbol="INTC",
+                order_type="Calls Bought",
+                strike="120C",
+                expiry="2026-06-18",
+                contracts=1000 + i,
+                trade_date="2026-05-20",
+            )
+        call(
+            tool_fn,
+            action="add",
+            symbol="INTC",
+            order_type="Puts Bought",
+            strike="90P",
+            expiry="2027-01-15",
+            contracts=3000,
+            trade_date="2026-05-20",
+        )
+        for i in range(3):
+            call(
+                tool_fn,
+                action="add",
+                symbol="NVDA",
+                order_type="Calls Bought",
+                strike="250C",
+                expiry="2026-06-18",
+                contracts=2000,
+                trade_date="2026-05-20",
+            )
+
+        listed = call(tool_fn, action="list", limit=50)
+        assert listed["count"] == 50
+
+        aggregate = call(tool_fn, action="aggregate")
+        assert aggregate["success"] is True
+        assert aggregate["summary"]["rows"] == 64
+        assert aggregate["periods"]["day"]["summary"]["contracts"] == sum(1000 + i for i in range(60)) + 3000 + 6000
+        assert aggregate["periods"]["day"]["bullishLeaders"][0]["symbol"] == "INTC"
+        assert aggregate["periods"]["day"]["bullishLeaders"][0]["bullish_score"] == 60
+        assert aggregate["periods"]["day"]["bullishLeaders"][0]["bearish_score"] == 1
+        assert aggregate["shortBullishSlams"][0]["symbol"] == "INTC"
+
 
 class TestOptionFlowMutations:
 
