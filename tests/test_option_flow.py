@@ -309,6 +309,33 @@ class TestOptionFlowQuery:
         assert nvda["cumulative_net"] == -1
         assert signals["topBearish"][0]["symbol"] == "NVDA"
 
+    def test_signals_weekly_buckets_over_explicit_range(self, tool_fn, user_token):
+        for order_type, day in [
+            ("Calls Bought", "2026-05-04"),
+            ("Puts Sold", "2026-05-06"),
+            ("Puts Bought", "2026-05-12"),
+            ("Calls Bought", "2026-05-20"),
+        ]:
+            call(
+                tool_fn,
+                action="add",
+                symbol="INTC",
+                order_type=order_type,
+                strike="120C" if "Call" in order_type else "90P",
+                expiry="2027-01-15",
+                contracts=1000,
+                trade_date=day,
+            )
+
+        signals = call(tool_fn, action="signals", symbol="INTC", from_date="2026-05-01", to_date="2026-05-21", bucket="week")
+        assert signals["range"] == {"startDate": "2026-05-01", "endDate": "2026-05-21", "bucket": "week"}
+        buckets = signals["buckets"]
+        assert [(x["period_start"], x["net_score"], x["range_cumulative_net"], x["cumulative_net"]) for x in buckets] == [
+            ("2026-05-04", 2, 2, 2),
+            ("2026-05-11", -1, 1, 1),
+            ("2026-05-18", 1, 2, 2),
+        ]
+
 
 class TestOptionFlowMutations:
 

@@ -314,7 +314,32 @@ def _build_aggregate(c, token: str, from_date: Optional[str], to_date: Optional[
     }
 
 
-def _build_signals(c, token: str, from_date: Optional[str], to_date: Optional[str], symbol: Optional[str]) -> dict:
+def _bucket_bounds(date_str: str, bucket: str) -> tuple[str, str]:
+    day = datetime.fromisoformat(str(date_str)[:10]).date()
+    if bucket == "day":
+        return day.isoformat(), day.isoformat()
+    if bucket == "week":
+        start = day - timedelta(days=day.weekday())
+        return start.isoformat(), (start + timedelta(days=6)).isoformat()
+    if bucket == "month":
+        start = day.replace(day=1)
+        if start.month == 12:
+            next_month = start.replace(year=start.year + 1, month=1)
+        else:
+            next_month = start.replace(month=start.month + 1)
+        return start.isoformat(), (next_month - timedelta(days=1)).isoformat()
+    raise ValueError("bucket must be one of: day, week, month")
+
+
+def _build_signals(
+    c,
+    token: str,
+    from_date: Optional[str],
+    to_date: Optional[str],
+    symbol: Optional[str],
+    bucket: Optional[str],
+    lookback_days: Optional[int],
+) -> dict:
     where_base = "user_token IN (?, ?)"
     base_params: list = [token, GLOBAL_OPTION_FLOW_TOKEN]
     if symbol:
@@ -329,7 +354,15 @@ def _build_signals(c, token: str, from_date: Optional[str], to_date: Optional[st
         return {"success": True, "latestDate": None, "daily": [], "symbols": []}
 
     end = (to_date or latest_date)[:10]
-    start = (from_date or _date_minus(end, 29))[:10]
+    bucket = (bucket or "day").lower()
+    if bucket not in {"day", "week", "month"}:
+        return {"error": "bucket must be one of: day, week, month"}
+    if from_date:
+        start = from_date[:10]
+    elif lookback_days:
+        start = _date_minus(end, max(1, int(lookback_days)) - 1)
+    else:
+        start = _date_minus(end, 29)
     rows = [
         row_to_dict(r)
         for r in c.execute(
@@ -376,6 +409,52 @@ def _build_signals(c, token: str, from_date: Optional[str], to_date: Optional[st
         by_symbol[symbol_key].append(item)
         if start <= item["trade_date"] <= end:
             daily.append(item)
+
+    grouped: dict[tuple[str, str], dict] = {}
+    for item in daily:
+        period_start, period_end = _bucket_bounds(item["trade_date"], bucket)
+        key = (item["symbol"], period_start)
+        existing = grouped.setdefault(
+            key,
+            {
+                "symbol": item["symbol"],
+                "period_start": period_start,
+                "period_end": min(period_end, end),
+                "bucket": bucket,
+                "bullish_points": 0,
+                "bearish_points": 0,
+                "net_score": 0,
+                "calls_bought": 0,
+                "puts_sold": 0,
+                "puts_bought": 0,
+                "contracts": 0,
+                "rows": 0,
+                "active_days": 0,
+                "largest_contracts": 0,
+                "longest_expiry": None,
+                "cumulative_net": 0,
+            },
+        )
+        existing["bullish_points"] += int(item["bullish_points"] or 0)
+        existing["bearish_points"] += int(item["bearish_points"] or 0)
+        existing["net_score"] += int(item["net_score"] or 0)
+        existing["calls_bought"] += int(item.get("calls_bought") or 0)
+        existing["puts_sold"] += int(item.get("puts_sold") or 0)
+        existing["puts_bought"] += int(item.get("puts_bought") or 0)
+        existing["contracts"] += int(item["contracts"] or 0)
+        existing["rows"] += int(item["rows"] or 0)
+        existing["active_days"] += 1
+        existing["largest_contracts"] = max(int(existing["largest_contracts"] or 0), int(item["largest_contracts"] or 0))
+        if not existing["longest_expiry"] or str(item.get("longest_expiry") or "") > str(existing["longest_expiry"]):
+            existing["longest_expiry"] = item.get("longest_expiry")
+        existing["cumulative_net"] = int(item["cumulative_net"] or 0)
+
+    bucketed: list[dict] = []
+    range_cumulative: dict[str, int] = defaultdict(int)
+    for item in sorted(grouped.values(), key=lambda x: (x["symbol"], x["period_start"])):
+        range_cumulative[item["symbol"]] += int(item["net_score"] or 0)
+        item["range_cumulative_net"] = range_cumulative[item["symbol"]]
+        bucketed.append(item)
 
     def window_stats(items: list[dict], days: int) -> dict:
         window_start = _date_minus(end, days - 1)
@@ -432,13 +511,16 @@ def _build_signals(c, token: str, from_date: Optional[str], to_date: Optional[st
         "source": "Superfinance option_flow signals",
         "latestDate": end,
         "fromDate": start,
+        "range": {"startDate": start, "endDate": end, "bucket": bucket},
         "scoring": {
             "bullish_points": "Calls Bought + Puts Sold, 1 point each",
             "bearish_points": "Puts Bought, 1 point each",
             "net_score": "bullish_points - bearish_points",
             "cumulative_net": "sum of daily net_score over time",
+            "range_cumulative_net": "sum of bucket net_score inside the selected start/end range",
         },
         "daily": daily,
+        "buckets": bucketed,
         "symbols": symbols[:200],
         "topBullish": symbols[:20],
         "topBearish": sorted(symbols, key=lambda x: (x["cumulative_net"], x["seven_day"]["net"]))[:20],
@@ -462,6 +544,8 @@ def register_option_flow_v2(server):
         # Filters for list
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
+        bucket: Optional[str] = None,
+        lookback_days: Optional[int] = None,
         limit: Optional[int] = 100,
         # Bulk
         rows: Optional[str] = None,
@@ -487,6 +571,7 @@ def register_option_flow_v2(server):
         - list: List trades. Filter by symbol/order_type/from_date/to_date.
         - aggregate: Full leader/period summary for canvas/digest. Optional symbol/from_date/to_date.
         - signals: Daily/cumulative directional score. Calls bought/puts sold = bullish, puts bought = bearish.
+                   Optional from_date/to_date, bucket=("day"|"week"|"month"), lookback_days.
         - clear: Delete all your trades (with confirm via source="CONFIRM_DELETE_ALL")
 
         Examples:
@@ -698,7 +783,7 @@ def register_option_flow_v2(server):
 
             elif action == "signals":
                 with connect() as c:
-                    result = _build_signals(c, token, from_date, to_date, symbol)
+                    result = _build_signals(c, token, from_date, to_date, symbol, bucket, lookback_days)
                 return json.dumps(result, indent=2)
 
             elif action == "clear":
