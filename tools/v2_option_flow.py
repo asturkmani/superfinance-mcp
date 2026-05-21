@@ -527,6 +527,343 @@ def _build_signals(
     }
 
 
+def _numeric_value(value) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().replace("$", "").replace(",", "")
+    multiplier = 1.0
+    if cleaned.lower().endswith("m"):
+        multiplier = 1_000_000.0
+        cleaned = cleaned[:-1]
+    elif cleaned.lower().endswith("k"):
+        multiplier = 1_000.0
+        cleaned = cleaned[:-1]
+    try:
+        return float(cleaned) * multiplier
+    except ValueError:
+        return None
+
+
+def _extract_premium_usd(raw_json: str | None) -> float | None:
+    if not raw_json:
+        return None
+    try:
+        data = json.loads(raw_json)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    for key in (
+        "premium_usd",
+        "total_premium_usd",
+        "premium",
+        "total_premium",
+        "cost",
+        "amount",
+        "value",
+        "notional",
+    ):
+        parsed = _numeric_value(data.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _expiry_days(trade_date: str, expiry: str | None) -> int | None:
+    if not expiry:
+        return None
+    try:
+        trade_day = datetime.fromisoformat(str(trade_date)[:10]).date()
+        expiry_day = datetime.fromisoformat(str(expiry)[:10]).date()
+        return (expiry_day - trade_day).days
+    except Exception:
+        return None
+
+
+def _trade_side(order_type: str) -> str:
+    if order_type in {"Calls Bought", "Puts Sold"}:
+        return "bullish"
+    if order_type == "Puts Bought":
+        return "bearish"
+    return "neutral"
+
+
+def _build_institutional_filters(
+    c,
+    token: str,
+    from_date: Optional[str],
+    to_date: Optional[str],
+    symbol: Optional[str],
+    lookback_days: Optional[int],
+    flow_filter: Optional[str],
+    min_trades: Optional[int],
+    min_active_days: Optional[int],
+    min_total_contracts: Optional[int],
+    min_premium_usd: Optional[float],
+    include_trades: Optional[bool],
+    limit: Optional[int],
+) -> dict:
+    where_base = "user_token IN (?, ?)"
+    base_params: list = [token, GLOBAL_OPTION_FLOW_TOKEN]
+    if symbol:
+        where_base += " AND upper(symbol) = ?"
+        base_params.append(symbol.upper())
+    latest_row = c.execute(
+        f"SELECT max(substr(trade_date, 1, 10)) AS latest_date FROM option_flow WHERE {where_base}",
+        base_params,
+    ).fetchone()
+    latest_date = latest_row["latest_date"] if latest_row else None
+    if not latest_date:
+        return {"success": True, "latestDate": None, "range": None, "results": []}
+
+    end = (to_date or latest_date)[:10]
+    if from_date:
+        start = from_date[:10]
+    else:
+        start = _date_minus(end, max(1, int(lookback_days or 14)) - 1)
+
+    rows = [
+        row_to_dict(r)
+        for r in c.execute(
+            f"""
+            SELECT *
+            FROM option_flow
+            WHERE {where_base}
+              AND date(trade_date) >= date(?)
+              AND date(trade_date) <= date(?)
+            ORDER BY trade_date DESC, contracts DESC
+            """,
+            [*base_params, start, end],
+        ).fetchall()
+    ]
+
+    by_symbol: dict[str, dict] = {}
+    for row in rows:
+        symbol_key = str(row["symbol"]).upper()
+        stats = by_symbol.setdefault(
+            symbol_key,
+            {
+                "symbol": symbol_key,
+                "rows": 0,
+                "bullish_points": 0,
+                "bearish_points": 0,
+                "net_score": 0,
+                "total_contracts": 0,
+                "bullish_contracts": 0,
+                "bearish_contracts": 0,
+                "active_dates": set(),
+                "bullish_dates": set(),
+                "bearish_dates": set(),
+                "latest_date": None,
+                "largest_bullish_contracts": 0,
+                "largest_bearish_contracts": 0,
+                "premium_usd": 0.0,
+                "bullish_premium_usd": 0.0,
+                "premium_rows": 0,
+                "near_dated_bullish": 0,
+                "medium_dated_bullish": 0,
+                "long_dated_bullish": 0,
+                "lines": defaultdict(lambda: {"rows": 0, "contracts": 0, "dates": set(), "order_type": None, "strike": None, "expiry": None}),
+                "trades": [],
+            },
+        )
+        trade_day = str(row["trade_date"])[:10]
+        side = _trade_side(row["order_type"])
+        contracts_value = int(row["contracts"] or 0)
+        premium = _extract_premium_usd(row.get("raw_json"))
+        expiry_days = _expiry_days(trade_day, row.get("expiry"))
+
+        stats["rows"] += 1
+        stats["total_contracts"] += contracts_value
+        stats["active_dates"].add(trade_day)
+        stats["latest_date"] = max(stats["latest_date"] or trade_day, trade_day)
+        if premium is not None:
+            stats["premium_usd"] += premium
+            stats["premium_rows"] += 1
+
+        if side == "bullish":
+            stats["bullish_points"] += 1
+            stats["net_score"] += 1
+            stats["bullish_contracts"] += contracts_value
+            stats["bullish_dates"].add(trade_day)
+            stats["largest_bullish_contracts"] = max(stats["largest_bullish_contracts"], contracts_value)
+            if premium is not None:
+                stats["bullish_premium_usd"] += premium
+            if expiry_days is not None:
+                if expiry_days <= 45:
+                    stats["near_dated_bullish"] += 1
+                elif expiry_days <= 180:
+                    stats["medium_dated_bullish"] += 1
+                else:
+                    stats["long_dated_bullish"] += 1
+        elif side == "bearish":
+            stats["bearish_points"] += 1
+            stats["net_score"] -= 1
+            stats["bearish_contracts"] += contracts_value
+            stats["bearish_dates"].add(trade_day)
+            stats["largest_bearish_contracts"] = max(stats["largest_bearish_contracts"], contracts_value)
+
+        line_key = (
+            str(row["order_type"]),
+            str(row.get("strike_label") or row.get("strike")),
+            str(row.get("expiry") or ""),
+        )
+        line = stats["lines"][line_key]
+        line["rows"] += 1
+        line["contracts"] += contracts_value
+        line["dates"].add(trade_day)
+        line["order_type"] = row["order_type"]
+        line["strike"] = row.get("strike_label") or row.get("strike")
+        line["expiry"] = row.get("expiry")
+        stats["trades"].append(
+            {
+                "id": row["id"],
+                "trade_date": trade_day,
+                "order_type": row["order_type"],
+                "strike": row.get("strike_label") or row.get("strike"),
+                "expiry": row.get("expiry"),
+                "contracts": contracts_value,
+                "expiry_days": expiry_days,
+                "premium_usd": premium,
+                "source": row.get("source"),
+            }
+        )
+
+    results = []
+    for stats in by_symbol.values():
+        active_days = len(stats["active_dates"])
+        bullish_days = len(stats["bullish_dates"])
+        bearish_days = len(stats["bearish_dates"])
+        bull_ratio = stats["bullish_points"] / max(1, stats["bullish_points"] + stats["bearish_points"])
+        repeat_lines = [
+            {
+                "order_type": line["order_type"],
+                "strike": line["strike"],
+                "expiry": line["expiry"],
+                "rows": line["rows"],
+                "contracts": line["contracts"],
+                "active_days": len(line["dates"]),
+            }
+            for line in stats["lines"].values()
+            if line["rows"] >= 2 or len(line["dates"]) >= 2
+        ]
+        repeat_lines.sort(key=lambda x: (x["rows"], x["contracts"]), reverse=True)
+
+        flags = []
+        if stats["bullish_points"] >= 3 and bullish_days >= 2 and stats["net_score"] >= 2:
+            flags.append("institutional_accumulation")
+        if stats["bullish_contracts"] >= 5_000 and bullish_days >= 2 and stats["net_score"] > 0:
+            flags.append("institutional_size")
+        if repeat_lines and stats["net_score"] > 0:
+            flags.append("repeat_line")
+        if (
+            stats["near_dated_bullish"] >= 1
+            and stats["largest_bullish_contracts"] >= 1_000
+            and stats["net_score"] > 0
+        ):
+            flags.append("someone_knows")
+        if stats["bullish_points"] >= 2 and bullish_days == 1 and stats["bullish_contracts"] >= 2_000:
+            flags.append("fresh_slam")
+        if stats["bullish_premium_usd"] > 0:
+            flags.append("premium_confirmed")
+        if stats["bearish_points"] >= 2 and bearish_days >= 1 and stats["net_score"] < 0:
+            flags.append("bearish_alert")
+
+        if not flags:
+            continue
+        if min_trades is not None and stats["bullish_points"] < int(min_trades):
+            continue
+        if min_active_days is not None and bullish_days < int(min_active_days):
+            continue
+        if min_total_contracts is not None and stats["bullish_contracts"] < int(min_total_contracts):
+            continue
+        if min_premium_usd is not None and stats["bullish_premium_usd"] < float(min_premium_usd):
+            continue
+
+        conviction_score = (
+            stats["net_score"] * 3
+            + bullish_days * 2
+            + min(stats["bullish_contracts"] / 1_000, 20)
+            + len(repeat_lines) * 2
+            + stats["long_dated_bullish"]
+            + (3 if "premium_confirmed" in flags else 0)
+        )
+        item = {
+            "symbol": stats["symbol"],
+            "flags": sorted(set(flags)),
+            "conviction_score": round(conviction_score, 2),
+            "latest_date": stats["latest_date"],
+            "active_days": active_days,
+            "bullish_active_days": bullish_days,
+            "bearish_active_days": bearish_days,
+            "bull_ratio": round(bull_ratio, 2),
+            "bullish_points": stats["bullish_points"],
+            "bearish_points": stats["bearish_points"],
+            "net_score": stats["net_score"],
+            "total_contracts": stats["total_contracts"],
+            "bullish_contracts": stats["bullish_contracts"],
+            "bearish_contracts": stats["bearish_contracts"],
+            "largest_bullish_contracts": stats["largest_bullish_contracts"],
+            "premium_usd": round(stats["bullish_premium_usd"], 2) if stats["bullish_premium_usd"] else None,
+            "premium_rows": stats["premium_rows"],
+            "expiry_mix": {
+                "near_dated_bullish_0_45d": stats["near_dated_bullish"],
+                "medium_dated_bullish_46_180d": stats["medium_dated_bullish"],
+                "long_dated_bullish_181d_plus": stats["long_dated_bullish"],
+            },
+            "repeat_lines": repeat_lines[:5],
+        }
+        if include_trades:
+            item["top_trades"] = sorted(stats["trades"], key=lambda x: (x["contracts"], x["trade_date"]), reverse=True)[:8]
+        results.append(item)
+
+    results.sort(
+        key=lambda x: (
+            "premium_confirmed" in x["flags"],
+            x["conviction_score"],
+            x["bullish_contracts"],
+            x["bullish_active_days"],
+        ),
+        reverse=True,
+    )
+
+    selected_filter = (flow_filter or "all").lower()
+    if selected_filter not in {"all", "someone_knows", "institutional_accumulation", "premium", "bearish"}:
+        return {"error": "filter must be one of: all, someone_knows, institutional_accumulation, premium, bearish"}
+    if selected_filter != "all":
+        flag_map = {
+            "someone_knows": {"someone_knows", "fresh_slam", "repeat_line"},
+            "institutional_accumulation": {"institutional_accumulation", "institutional_size", "repeat_line"},
+            "premium": {"premium_confirmed"},
+            "bearish": {"bearish_alert"},
+        }
+        wanted = flag_map[selected_filter]
+        results = [x for x in results if wanted.intersection(x["flags"])]
+
+    lim = max(1, min(int(limit or 50), 200))
+    return {
+        "success": True,
+        "source": "Superfinance option_flow institutional filters",
+        "latestDate": end,
+        "range": {"startDate": start, "endDate": end, "lookbackDays": (datetime.fromisoformat(end) - datetime.fromisoformat(start)).days + 1},
+        "filter": selected_filter,
+        "definitions": {
+            "someone_knows": "Near-dated bullish flow, fresh bullish slam, or repeat same-line buying that may imply event knowledge.",
+            "institutional_accumulation": "Repeated bullish call-buying / put-selling across days, size, or same strike-expiry line accumulation.",
+            "premium": "Premium-ranked flow when raw feed rows include paid-premium/notional fields.",
+            "bearish": "Repeated put-buying with negative net score.",
+        },
+        "premiumAvailable": any(x.get("premium_rows", 0) for x in results),
+        "count": min(len(results), lim),
+        "totalMatching": len(results),
+        "results": results[:lim],
+    }
+
+
 def register_option_flow_v2(server):
 
     @server.tool()
@@ -546,6 +883,12 @@ def register_option_flow_v2(server):
         to_date: Optional[str] = None,
         bucket: Optional[str] = None,
         lookback_days: Optional[int] = None,
+        filter: Optional[str] = None,
+        min_trades: Optional[int] = None,
+        min_active_days: Optional[int] = None,
+        min_total_contracts: Optional[int] = None,
+        min_premium_usd: Optional[float] = None,
+        include_trades: Optional[bool] = False,
         limit: Optional[int] = 100,
         # Bulk
         rows: Optional[str] = None,
@@ -572,6 +915,8 @@ def register_option_flow_v2(server):
         - aggregate: Full leader/period summary for canvas/digest. Optional symbol/from_date/to_date.
         - signals: Daily/cumulative directional score. Calls bought/puts sold = bullish, puts bought = bearish.
                    Optional from_date/to_date, bucket=("day"|"week"|"month"), lookback_days.
+        - institutional_filters: "someone knows" / institutional accumulation filters. Default lookback_days=14.
+                   Optional filter=("all"|"someone_knows"|"institutional_accumulation"|"premium"|"bearish").
         - clear: Delete all your trades (with confirm via source="CONFIRM_DELETE_ALL")
 
         Examples:
@@ -786,6 +1131,25 @@ def register_option_flow_v2(server):
                     result = _build_signals(c, token, from_date, to_date, symbol, bucket, lookback_days)
                 return json.dumps(result, indent=2)
 
+            elif action in {"institutional_filters", "filters"}:
+                with connect() as c:
+                    result = _build_institutional_filters(
+                        c,
+                        token,
+                        from_date,
+                        to_date,
+                        symbol,
+                        lookback_days or 14,
+                        filter,
+                        min_trades,
+                        min_active_days,
+                        min_total_contracts,
+                        min_premium_usd,
+                        include_trades,
+                        limit,
+                    )
+                return json.dumps(result, indent=2)
+
             elif action == "clear":
                 if source != "CONFIRM_DELETE_ALL":
                     return json.dumps(
@@ -805,7 +1169,19 @@ def register_option_flow_v2(server):
                 return json.dumps(
                     {
                         "error": f"unknown action: {action}",
-                        "valid": ["add", "add_bulk", "update", "remove", "get", "list", "aggregate", "signals", "clear"],
+                        "valid": [
+                            "add",
+                            "add_bulk",
+                            "update",
+                            "remove",
+                            "get",
+                            "list",
+                            "aggregate",
+                            "signals",
+                            "institutional_filters",
+                            "filters",
+                            "clear",
+                        ],
                     },
                     indent=2,
                 )

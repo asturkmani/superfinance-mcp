@@ -336,6 +336,78 @@ class TestOptionFlowQuery:
             ("2026-05-18", 1, 2, 2),
         ]
 
+    def test_institutional_filters_default_lookback_and_flags(self, tool_fn, user_token):
+        for day, contracts in [
+            ("2026-05-08", 750),
+            ("2026-05-12", 1500),
+            ("2026-05-20", 2500),
+        ]:
+            call(
+                tool_fn,
+                action="add",
+                symbol="INTC",
+                order_type="Calls Bought",
+                strike="120C",
+                expiry="2026-06-18",
+                contracts=contracts,
+                trade_date=day,
+            )
+        call(
+            tool_fn,
+            action="add",
+            symbol="NVDA",
+            order_type="Puts Bought",
+            strike="170P",
+            expiry="2026-06-18",
+            contracts=2000,
+            trade_date="2026-05-20",
+        )
+        call(
+            tool_fn,
+            action="add",
+            symbol="OLD",
+            order_type="Calls Bought",
+            strike="20C",
+            expiry="2026-06-18",
+            contracts=5000,
+            trade_date="2026-05-01",
+        )
+
+        r = call(tool_fn, action="institutional_filters", to_date="2026-05-21")
+        assert r["success"] is True
+        assert r["range"] == {"startDate": "2026-05-08", "endDate": "2026-05-21", "lookbackDays": 14}
+        symbols = {x["symbol"]: x for x in r["results"]}
+        assert "INTC" in symbols
+        assert "OLD" not in symbols
+        assert {"institutional_accumulation", "someone_knows"}.issubset(set(symbols["INTC"]["flags"]))
+        assert symbols["INTC"]["bullish_active_days"] == 3
+        assert symbols["INTC"]["net_score"] == 3
+
+    def test_institutional_filters_filter_and_premium_from_raw_json(self, tool_fn, user_token):
+        with db_mod.connect() as c:
+            c.execute(
+                """INSERT INTO option_flow
+                   (user_token, trade_date, order_type, symbol, strike, expiry, contracts, raw_json, source, sync_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "__global__",
+                    "2026-05-20",
+                    "Calls Bought",
+                    "TTMI",
+                    "180C",
+                    "2026-06-18",
+                    5000,
+                    '{"premium":"$2.5M"}',
+                    "jamesbulltard",
+                    "premium-row-1",
+                ),
+            )
+        r = call(tool_fn, action="filters", filter="premium", to_date="2026-05-21", include_trades=True)
+        assert r["premiumAvailable"] is True
+        assert r["results"][0]["symbol"] == "TTMI"
+        assert r["results"][0]["premium_usd"] == 2500000.0
+        assert r["results"][0]["top_trades"][0]["premium_usd"] == 2500000.0
+
 
 class TestOptionFlowMutations:
 
