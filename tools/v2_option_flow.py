@@ -1,6 +1,7 @@
 """Option flow CRUD tool backed by SQLite."""
 
 import json
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -313,6 +314,137 @@ def _build_aggregate(c, token: str, from_date: Optional[str], to_date: Optional[
     }
 
 
+def _build_signals(c, token: str, from_date: Optional[str], to_date: Optional[str], symbol: Optional[str]) -> dict:
+    where_base = "user_token IN (?, ?)"
+    base_params: list = [token, GLOBAL_OPTION_FLOW_TOKEN]
+    if symbol:
+        where_base += " AND upper(symbol) = ?"
+        base_params.append(symbol.upper())
+    latest_row = c.execute(
+        f"SELECT max(substr(trade_date, 1, 10)) AS latest_date FROM option_flow WHERE {where_base}",
+        base_params,
+    ).fetchone()
+    latest_date = latest_row["latest_date"] if latest_row else None
+    if not latest_date:
+        return {"success": True, "latestDate": None, "daily": [], "symbols": []}
+
+    end = (to_date or latest_date)[:10]
+    start = (from_date or _date_minus(end, 29))[:10]
+    rows = [
+        row_to_dict(r)
+        for r in c.execute(
+            f"""
+            SELECT upper(symbol) AS symbol,
+                   substr(trade_date, 1, 10) AS trade_date,
+                   coalesce(sum(CASE WHEN order_type IN ('Calls Bought', 'Puts Sold') THEN 1 ELSE 0 END), 0) AS bullish_points,
+                   coalesce(sum(CASE WHEN order_type = 'Puts Bought' THEN 1 ELSE 0 END), 0) AS bearish_points,
+                   coalesce(sum(CASE
+                       WHEN order_type IN ('Calls Bought', 'Puts Sold') THEN 1
+                       WHEN order_type = 'Puts Bought' THEN -1
+                       ELSE 0
+                   END), 0) AS net_score,
+                   coalesce(sum(CASE WHEN order_type = 'Calls Bought' THEN 1 ELSE 0 END), 0) AS calls_bought,
+                   coalesce(sum(CASE WHEN order_type = 'Puts Sold' THEN 1 ELSE 0 END), 0) AS puts_sold,
+                   coalesce(sum(CASE WHEN order_type = 'Puts Bought' THEN 1 ELSE 0 END), 0) AS puts_bought,
+                   coalesce(sum(contracts), 0) AS contracts,
+                   count(*) AS rows,
+                   max(contracts) AS largest_contracts,
+                   max(expiry) AS longest_expiry
+            FROM option_flow
+            WHERE {where_base}
+              AND date(trade_date) <= date(?)
+            GROUP BY upper(symbol), substr(trade_date, 1, 10)
+            ORDER BY upper(symbol), substr(trade_date, 1, 10)
+            """,
+            [*base_params, end],
+        ).fetchall()
+    ]
+
+    by_symbol: dict[str, list[dict]] = defaultdict(list)
+    cumulative: dict[str, int] = defaultdict(int)
+    daily: list[dict] = []
+    for row in rows:
+        symbol_key = row["symbol"]
+        cumulative[symbol_key] += int(row["net_score"] or 0)
+        item = {
+            **row,
+            "bullish_points": int(row["bullish_points"] or 0),
+            "bearish_points": int(row["bearish_points"] or 0),
+            "net_score": int(row["net_score"] or 0),
+            "cumulative_net": cumulative[symbol_key],
+        }
+        by_symbol[symbol_key].append(item)
+        if start <= item["trade_date"] <= end:
+            daily.append(item)
+
+    def window_stats(items: list[dict], days: int) -> dict:
+        window_start = _date_minus(end, days - 1)
+        window = [x for x in items if window_start <= x["trade_date"] <= end]
+        return {
+            "net": sum(int(x["net_score"] or 0) for x in window),
+            "bullish_points": sum(int(x["bullish_points"] or 0) for x in window),
+            "bearish_points": sum(int(x["bearish_points"] or 0) for x in window),
+            "contracts": sum(int(x["contracts"] or 0) for x in window),
+            "active_days": len(window),
+        }
+
+    symbols = []
+    for symbol_key, items in by_symbol.items():
+        latest = items[-1]
+        w7 = window_stats(items, 7)
+        w30 = window_stats(items, 30)
+        w90 = window_stats(items, 90)
+        rate_7d = w7["net"] / 7
+        rate_30d = w30["net"] / 30
+        state = "Noise"
+        if latest["trade_date"] == end and latest["net_score"] > 0 and w30["active_days"] <= 1:
+            state = "Fresh Slam"
+        elif w90["net"] > 0 and w90["active_days"] >= 4 and w30["net"] > 0:
+            state = "Persistent Accumulation"
+        if w30["net"] > 0 and rate_7d > max(1, rate_30d * 1.5):
+            state = "Acceleration"
+        elif w30["net"] > 0 and rate_7d < rate_30d * 0.5:
+            state = "Fading"
+        elif latest["net_score"] < 0 and w30["net"] <= 0:
+            state = "Bearish Reversal"
+
+        symbols.append(
+            {
+                "symbol": symbol_key,
+                "state": state,
+                "latest_date": latest["trade_date"],
+                "latest_net": latest["net_score"],
+                "cumulative_net": latest["cumulative_net"],
+                "day": {
+                    "bullish_points": latest["bullish_points"] if latest["trade_date"] == end else 0,
+                    "bearish_points": latest["bearish_points"] if latest["trade_date"] == end else 0,
+                    "net": latest["net_score"] if latest["trade_date"] == end else 0,
+                },
+                "seven_day": w7,
+                "thirty_day": w30,
+                "ninety_day": w90,
+            }
+        )
+    symbols.sort(key=lambda x: (x["cumulative_net"], x["seven_day"]["net"], x["thirty_day"]["contracts"]), reverse=True)
+
+    return {
+        "success": True,
+        "source": "Superfinance option_flow signals",
+        "latestDate": end,
+        "fromDate": start,
+        "scoring": {
+            "bullish_points": "Calls Bought + Puts Sold, 1 point each",
+            "bearish_points": "Puts Bought, 1 point each",
+            "net_score": "bullish_points - bearish_points",
+            "cumulative_net": "sum of daily net_score over time",
+        },
+        "daily": daily,
+        "symbols": symbols[:200],
+        "topBullish": symbols[:20],
+        "topBearish": sorted(symbols, key=lambda x: (x["cumulative_net"], x["seven_day"]["net"]))[:20],
+    }
+
+
 def register_option_flow_v2(server):
 
     @server.tool()
@@ -354,6 +486,7 @@ def register_option_flow_v2(server):
         - get: Get a single trade by id
         - list: List trades. Filter by symbol/order_type/from_date/to_date.
         - aggregate: Full leader/period summary for canvas/digest. Optional symbol/from_date/to_date.
+        - signals: Daily/cumulative directional score. Calls bought/puts sold = bullish, puts bought = bearish.
         - clear: Delete all your trades (with confirm via source="CONFIRM_DELETE_ALL")
 
         Examples:
@@ -563,6 +696,11 @@ def register_option_flow_v2(server):
                     result = _build_aggregate(c, token, from_date, to_date, symbol)
                 return json.dumps(result, indent=2)
 
+            elif action == "signals":
+                with connect() as c:
+                    result = _build_signals(c, token, from_date, to_date, symbol)
+                return json.dumps(result, indent=2)
+
             elif action == "clear":
                 if source != "CONFIRM_DELETE_ALL":
                     return json.dumps(
@@ -582,7 +720,7 @@ def register_option_flow_v2(server):
                 return json.dumps(
                     {
                         "error": f"unknown action: {action}",
-                        "valid": ["add", "add_bulk", "update", "remove", "get", "list", "aggregate", "clear"],
+                        "valid": ["add", "add_bulk", "update", "remove", "get", "list", "aggregate", "signals", "clear"],
                     },
                     indent=2,
                 )

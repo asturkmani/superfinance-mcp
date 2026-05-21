@@ -266,6 +266,49 @@ class TestOptionFlowQuery:
         assert aggregate["periods"]["day"]["bullishLeaders"][0]["bearish_score"] == 1
         assert aggregate["shortBullishSlams"][0]["symbol"] == "INTC"
 
+    def test_signals_simple_directional_scoring_and_cumulative_net(self, tool_fn, user_token):
+        for order_type, day in [
+            ("Calls Bought", "2026-05-18"),
+            ("Puts Sold", "2026-05-18"),
+            ("Puts Bought", "2026-05-19"),
+            ("Calls Bought", "2026-05-20"),
+        ]:
+            call(
+                tool_fn,
+                action="add",
+                symbol="INTC",
+                order_type=order_type,
+                strike="120C" if "Call" in order_type else "90P",
+                expiry="2027-01-15",
+                contracts=1000,
+                trade_date=day,
+            )
+        call(
+            tool_fn,
+            action="add",
+            symbol="NVDA",
+            order_type="Puts Bought",
+            strike="170P",
+            expiry="2027-01-15",
+            contracts=2000,
+            trade_date="2026-05-20",
+        )
+
+        signals = call(tool_fn, action="signals", from_date="2026-05-18", to_date="2026-05-20")
+        intc_days = [x for x in signals["daily"] if x["symbol"] == "INTC"]
+        assert [x["net_score"] for x in intc_days] == [2, -1, 1]
+        assert [x["cumulative_net"] for x in intc_days] == [2, 1, 2]
+
+        intc = next(x for x in signals["symbols"] if x["symbol"] == "INTC")
+        assert intc["cumulative_net"] == 2
+        assert intc["seven_day"]["bullish_points"] == 3
+        assert intc["seven_day"]["bearish_points"] == 1
+        assert intc["seven_day"]["net"] == 2
+
+        nvda = next(x for x in signals["symbols"] if x["symbol"] == "NVDA")
+        assert nvda["cumulative_net"] == -1
+        assert signals["topBearish"][0]["symbol"] == "NVDA"
+
 
 class TestOptionFlowMutations:
 
