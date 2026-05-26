@@ -52,6 +52,8 @@ def init_db():
             strike_label TEXT,
             expiry TEXT NOT NULL,
             contracts INTEGER NOT NULL,
+            premium TEXT,
+            premium_usd REAL,
             notes TEXT,
             source TEXT DEFAULT 'manual',
             source_page TEXT,
@@ -74,6 +76,8 @@ def init_db():
             ("raw_json", "TEXT"),
             ("imported_at", "TEXT"),
             ("sync_key", "TEXT"),
+            ("premium", "TEXT"),
+            ("premium_usd", "REAL"),
         ]:
             _ensure_column(c, "option_flow", column, ddl)
 

@@ -68,6 +68,8 @@ def _row_to_payload(row: sqlite3.Row) -> dict[str, Any]:
         "strike_label": strike_label,
         "expiry": row["expiry"],
         "contracts": row["contracts"],
+        "premium": row["premium"],
+        "premium_usd": row["premium_usd"],
         "source": row["source"] or "jamesbulltard",
         "source_page": row["source_page"],
         "raw_json": raw_json,
@@ -94,18 +96,23 @@ def iter_rows(
         where.append(f"upper(symbol) IN ({placeholders})")
         params.extend(s.upper() for s in symbols)
 
-    sql = """
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+    cols = {row["name"] for row in con.execute("PRAGMA table_info(option_flow_trades)")}
+    premium_expr = "premium" if "premium" in cols else "NULL AS premium"
+    premium_usd_expr = "premium_usd" if "premium_usd" in cols else "NULL AS premium_usd"
+
+    sql = f"""
         SELECT id, trade_datetime, trade_date, order_type, action, symbol, strike,
-               option_type, strike_label, expiry, contracts, source, source_page,
-               raw_json, imported_at
+               option_type, strike_label, expiry, contracts,
+               {premium_expr}, {premium_usd_expr},
+               source, source_page, raw_json, imported_at
         FROM option_flow_trades
     """
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY trade_date, id"
 
-    con = sqlite3.connect(db_path)
-    con.row_factory = sqlite3.Row
     try:
         for row in con.execute(sql, params):
             yield _row_to_payload(row)

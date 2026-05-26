@@ -116,6 +116,7 @@ def _aggregate_period(c, key: str, label: str, start: str, end: str, latest_date
     row = c.execute(
         f"""
         SELECT count(*) AS rows, coalesce(sum(contracts), 0) AS contracts,
+               coalesce(sum(premium_usd), 0) AS premium_usd,
                min(substr(trade_date, 1, 10)) AS start_date,
                max(substr(trade_date, 1, 10)) AS end_date,
                count(DISTINCT substr(trade_date, 1, 10)) AS trading_days
@@ -128,7 +129,8 @@ def _aggregate_period(c, key: str, label: str, start: str, end: str, latest_date
         row_to_dict(r)
         for r in c.execute(
             f"""
-            SELECT order_type, count(*) AS rows, coalesce(sum(contracts), 0) AS contracts
+            SELECT order_type, count(*) AS rows, coalesce(sum(contracts), 0) AS contracts,
+                   coalesce(sum(premium_usd), 0) AS premium_usd
             FROM option_flow
             WHERE {where}
             GROUP BY order_type
@@ -151,6 +153,7 @@ def _aggregate_period(c, key: str, label: str, start: str, end: str, latest_date
                    count(DISTINCT CASE WHEN order_type IN ('Calls Bought', 'Puts Sold') THEN substr(trade_date, 1, 10) END) AS bullish_days,
                    count(DISTINCT CASE WHEN order_type = 'Puts Bought' THEN substr(trade_date, 1, 10) END) AS bearish_days,
                    coalesce(sum(contracts), 0) AS contracts,
+                   coalesce(sum(premium_usd), 0) AS premium_usd,
                    count(*) AS rows,
                    max(substr(trade_date, 1, 10)) AS last_seen
             FROM option_flow
@@ -169,7 +172,7 @@ def _aggregate_period(c, key: str, label: str, start: str, end: str, latest_date
             f"""
             SELECT upper(symbol) AS symbol, order_type,
                    coalesce(strike_label, strike) AS strike_label,
-                   expiry, contracts, substr(trade_date, 1, 10) AS trade_date
+                   expiry, contracts, premium, premium_usd, substr(trade_date, 1, 10) AS trade_date
             FROM option_flow
             WHERE {where}
             ORDER BY contracts DESC
@@ -190,6 +193,8 @@ def _aggregate_period(c, key: str, label: str, start: str, end: str, latest_date
             "rowsLabel": f"{int(row['rows'] or 0):,}",
             "contracts": row["contracts"] or 0,
             "contractsLabel": f"{int(row['contracts'] or 0):,}",
+            "premiumUsd": row["premium_usd"] or 0,
+            "premiumUsdLabel": f"${float(row['premium_usd'] or 0):,.0f}",
             "startDate": row["start_date"],
             "endDate": row["end_date"],
             "tradingDays": row["trading_days"] or 0,
@@ -542,6 +547,9 @@ def _numeric_value(value) -> float | None:
     elif cleaned.lower().endswith("k"):
         multiplier = 1_000.0
         cleaned = cleaned[:-1]
+    elif cleaned.lower().endswith("b"):
+        multiplier = 1_000_000_000.0
+        cleaned = cleaned[:-1]
     try:
         return float(cleaned) * multiplier
     except ValueError:
@@ -571,6 +579,16 @@ def _extract_premium_usd(raw_json: str | None) -> float | None:
         if parsed is not None:
             return parsed
     return None
+
+
+def _row_premium_usd(row: dict) -> float | None:
+    parsed = _numeric_value(row.get("premium_usd"))
+    if parsed is not None:
+        return parsed
+    parsed = _numeric_value(row.get("premium"))
+    if parsed is not None:
+        return parsed
+    return _extract_premium_usd(row.get("raw_json"))
 
 
 def _expiry_days(trade_date: str, expiry: str | None) -> int | None:
@@ -674,7 +692,7 @@ def _build_institutional_filters(
         trade_day = str(row["trade_date"])[:10]
         side = _trade_side(row["order_type"])
         contracts_value = int(row["contracts"] or 0)
-        premium = _extract_premium_usd(row.get("raw_json"))
+        premium = _row_premium_usd(row)
         expiry_days = _expiry_days(trade_day, row.get("expiry"))
 
         stats["rows"] += 1
@@ -878,6 +896,8 @@ def register_option_flow_v2(server):
         trade_date: Optional[str] = None,
         notes: Optional[str] = None,
         source: Optional[str] = None,
+        premium: Optional[str] = None,
+        premium_usd: Optional[float] = None,
         # Filters for list
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
@@ -903,7 +923,7 @@ def register_option_flow_v2(server):
         - strike      (e.g. "270C", "250P", "320/370C" for spreads — kept as string)
         - expiry      (YYYY-MM-DD)
         - contracts   (int)
-        - notes, source (optional)
+        - premium/premium_usd, notes, source (optional)
 
         Actions:
         - add: Insert a single trade
@@ -959,8 +979,9 @@ def register_option_flow_v2(server):
                 with connect() as c:
                     cur = c.execute(
                         """INSERT INTO option_flow
-                           (user_token, trade_date, order_type, symbol, strike, expiry, contracts, notes, source)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           (user_token, trade_date, order_type, symbol, strike, expiry, contracts,
+                            premium, premium_usd, notes, source)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             token,
                             trade_date,
@@ -969,6 +990,8 @@ def register_option_flow_v2(server):
                             strike,
                             expiry,
                             int(contracts),
+                            premium,
+                            _numeric_value(premium_usd) if premium_usd is not None else _numeric_value(premium),
                             notes,
                             source or "manual",
                         ),
@@ -1000,8 +1023,9 @@ def register_option_flow_v2(server):
                         try:
                             c.execute(
                                 """INSERT INTO option_flow
-                                   (user_token, trade_date, order_type, symbol, strike, expiry, contracts, notes, source)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   (user_token, trade_date, order_type, symbol, strike, expiry, contracts,
+                                    premium, premium_usd, notes, source)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                                 (
                                     token,
                                     item["trade_date"],
@@ -1010,6 +1034,8 @@ def register_option_flow_v2(server):
                                     item["strike"],
                                     item["expiry"],
                                     int(item["contracts"]),
+                                    item.get("premium"),
+                                    _numeric_value(item.get("premium_usd")) or _numeric_value(item.get("premium")),
                                     item.get("notes"),
                                     item.get("source", "manual"),
                                 ),
@@ -1034,6 +1060,8 @@ def register_option_flow_v2(server):
                     ("strike", strike),
                     ("expiry", expiry),
                     ("contracts", contracts),
+                    ("premium", premium),
+                    ("premium_usd", premium_usd),
                     ("notes", notes),
                     ("source", source),
                 ]:

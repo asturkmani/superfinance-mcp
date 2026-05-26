@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from typing import Any
 
 from starlette.requests import Request
@@ -27,6 +28,8 @@ SYNC_COLUMNS = [
     "strike_label",
     "expiry",
     "contracts",
+    "premium",
+    "premium_usd",
     "notes",
     "source",
     "source_page",
@@ -43,6 +46,51 @@ def _json_or_none(value: Any) -> str | None:
         # Keep strings as-is; local exporter sends compact JSON strings for raw_json.
         return value
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _numeric_value(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().replace("$", "").replace(",", "")
+    match = re.fullmatch(r"([+-]?\d+(?:\.\d+)?)([kKmMbB]?)", cleaned)
+    if not match:
+        return None
+    multiplier = {"": 1.0, "K": 1_000.0, "M": 1_000_000.0, "B": 1_000_000_000.0}
+    return float(match.group(1)) * multiplier[match.group(2).upper()]
+
+
+def _premium_usd(row: dict[str, Any]) -> float | None:
+    direct = _numeric_value(row.get("premium_usd"))
+    if direct is not None:
+        return direct
+    direct = _numeric_value(row.get("premium"))
+    if direct is not None:
+        return direct
+    raw_json = row.get("raw_json")
+    if isinstance(raw_json, str):
+        try:
+            raw_json = json.loads(raw_json)
+        except Exception:
+            raw_json = None
+    if isinstance(raw_json, dict):
+        for key in (
+            "premium_usd",
+            "total_premium_usd",
+            "premium",
+            "total_premium",
+            "cost",
+            "amount",
+            "value",
+            "notional",
+        ):
+            parsed = _numeric_value(raw_json.get(key))
+            if parsed is not None:
+                return parsed
+    return None
 
 
 def _make_sync_key(row: dict[str, Any]) -> str:
@@ -91,6 +139,8 @@ def _normalize_row(row: dict[str, Any]) -> dict[str, Any]:
         "strike_label": row.get("strike_label"),
         "expiry": str(row["expiry"]),
         "contracts": int(row["contracts"]),
+        "premium": row.get("premium"),
+        "premium_usd": _premium_usd(row),
         "notes": row.get("notes"),
         "source": row.get("source") or "sync",
         "source_page": row.get("source_page"),
