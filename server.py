@@ -440,9 +440,22 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
             )
 
         # --- Build the app ---
-        # SSE transport only — streamable-http's session handling returns 400
-        # on Claude Desktop's follow-up requests. SSE is reliable.
-        mcp_app = yfinance_server.http_app(path="/mcp", transport="sse")
+        # Dual transport:
+        #   POST/DELETE /mcp -> STATELESS streamable-http. stateless_http=True is
+        #     the critical bit: stateful sessions die on machine restart / new
+        #     connection, which made Claude Desktop's follow-up requests 400 and
+        #     the connector "lose" tools until manually refreshed.
+        #   GET /mcp + /messages -> SSE (legacy fallback for already-configured
+        #     clients; SSE is deprecated in MCP but harmless to keep).
+        http_mcp_app = yfinance_server.http_app(
+            path="/mcp", transport="streamable-http", stateless_http=True
+        )
+        sse_mcp_app = yfinance_server.http_app(path="/mcp", transport="sse")
+
+        def pick_mcp_app(path: str, method: str):
+            if path.startswith("/mcp") and method in ("POST", "DELETE"):
+                return http_mcp_app
+            return sse_mcp_app
 
         oauth_authorize_post = make_authorize_post(find_or_create_user_token)
 
@@ -464,11 +477,12 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
             ]
         )
 
-        # Token-aware ASGI wrapper forwarding to SSE transport.
+        # Token-aware ASGI wrapper dispatching to the right MCP transport.
         class App:
             async def __call__(self, scope, receive, send):
                 if scope["type"] in ("http", "websocket"):
                     path = scope.get("path", "")
+                    method = scope.get("method", "")
                     parts = path.strip("/").split("/")
 
                     # /{token}/mcp or /{token}/messages -> strip token, set user context
@@ -489,7 +503,7 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
                         scope = dict(scope, path=new_path or "/")
                         tok = current_user_token.set(token)
                         try:
-                            await mcp_app(scope, receive, send)
+                            await pick_mcp_app(new_path, method)(scope, receive, send)
                         finally:
                             current_user_token.reset(tok)
                         return
@@ -502,11 +516,12 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
                         or path == "/messages"
                         or path.startswith("/messages/")
                     ):
+                        target = pick_mcp_app(path, method)
                         token = extract_bearer_token(scope.get("headers", []))
                         if token and get_user(token):
                             tok = current_user_token.set(token)
                             try:
-                                await mcp_app(scope, receive, send)
+                                await target(scope, receive, send)
                             finally:
                                 current_user_token.reset(tok)
                             return
@@ -520,15 +535,29 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
                             await response(scope, receive, send)
                             return
                         # No bearer at all → fall through (admin/env-var path)
-                        await mcp_app(scope, receive, send)
+                        await target(scope, receive, send)
                         return
 
                     await routes_app(scope, receive, send)
                 else:
-                    # lifespan
-                    await mcp_app(scope, receive, send)
+                    # Other scope types (websocket negotiation edge cases)
+                    await sse_mcp_app(scope, receive, send)
 
-        app = App()
+        # Both transports need their lifespans run (streamable-http inits its
+        # session manager task group there — without it, requests 500).
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def combined_lifespan(app):
+            async with sse_mcp_app.router.lifespan_context(sse_mcp_app):
+                async with http_mcp_app.router.lifespan_context(http_mcp_app):
+                    yield
+
+        from starlette.routing import Mount
+        app = Starlette(
+            lifespan=combined_lifespan,
+            routes=[Mount("/", app=App())],
+        )
 
         print("Signup page: /")
         print("Per-user MCP: /{token}/mcp")
