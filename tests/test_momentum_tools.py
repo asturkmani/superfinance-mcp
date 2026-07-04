@@ -1,4 +1,4 @@
-"""Tests for momentum_group_scan and momentum_stock_scan tools."""
+"""Tests for momentum_group_scan, momentum_theme_scan, and momentum_stock_scan tools."""
 
 import json
 import sys
@@ -19,6 +19,7 @@ def _make_tools():
     for t in server._tool_manager._tools.values():
         tools[t.name] = t.fn
     assert "momentum_group_scan" in tools
+    assert "momentum_theme_scan" in tools
     assert "momentum_stock_scan" in tools
     return tools
 
@@ -33,8 +34,24 @@ class _FakeGroupPerf:
         assert order == "Performance (Quarter)"
         return pd.DataFrame(
             [
-                {"Name": "Computer Hardware", "Perf Week": "3.00%", "Perf Month": 0.10, "Perf Quart": 0.30, "Perf Half": 0.60, "Perf Year": 1.00, "Perf YTD": 0.20},
-                {"Name": "Oil & Gas Drilling", "Perf Week": "2.00%", "Perf Month": 0.12, "Perf Quart": 0.18, "Perf Half": 0.55, "Perf Year": 0.90, "Perf YTD": 0.15},
+                {
+                    "Name": "Computer Hardware",
+                    "Perf Week": "3.00%",
+                    "Perf Month": 0.10,
+                    "Perf Quart": 0.30,
+                    "Perf Half": 0.60,
+                    "Perf Year": 1.00,
+                    "Perf YTD": 0.20,
+                },
+                {
+                    "Name": "Oil & Gas Drilling",
+                    "Perf Week": "2.00%",
+                    "Perf Month": 0.12,
+                    "Perf Quart": 0.18,
+                    "Perf Half": 0.55,
+                    "Perf Year": 0.90,
+                    "Perf YTD": 0.15,
+                },
             ]
         )
 
@@ -46,8 +63,26 @@ class _FakeStockPerf:
     def screener_view(self):
         return pd.DataFrame(
             [
-                {"Ticker": "AAA", "Perf Week": "2.0%", "Perf Month": 0.10, "Perf Quart": 0.20, "Perf Half": 0.30, "Perf Year": 0.40, "Price": 55.2, "Avg Volume": 1500000},
-                {"Ticker": "BBB", "Perf Week": "1.0%", "Perf Month": 0.05, "Perf Quart": 0.08, "Perf Half": 0.10, "Perf Year": 0.12, "Price": 12.7, "Avg Volume": 600000},
+                {
+                    "Ticker": "AAA",
+                    "Perf Week": "2.0%",
+                    "Perf Month": 0.10,
+                    "Perf Quart": 0.20,
+                    "Perf Half": 0.30,
+                    "Perf Year": 0.40,
+                    "Price": 55.2,
+                    "Avg Volume": 1500000,
+                },
+                {
+                    "Ticker": "BBB",
+                    "Perf Week": "1.0%",
+                    "Perf Month": 0.05,
+                    "Perf Quart": 0.08,
+                    "Perf Half": 0.10,
+                    "Perf Year": 0.12,
+                    "Price": 12.7,
+                    "Avg Volume": 600000,
+                },
             ]
         )
 
@@ -67,6 +102,47 @@ def test_group_scan_invalid_group():
     r = _json_call(tools["momentum_group_scan"], group="Theme")
     assert "error" in r
     assert "valid_group_options" in r
+
+
+def test_theme_scan_success(monkeypatch):
+    tools = _make_tools()
+
+    def fake_fetch_theme_perf(st):
+        data = {
+            "w1": {
+                "aicompute": 10.0,
+                "aisecurity": 8.0,
+                "semismemory": -5.0,
+                "spacesatellites": 15.0,
+            },
+            "w4": {
+                "aicompute": 20.0,
+                "aisecurity": 4.0,
+                "semismemory": -10.0,
+                "spacesatellites": 3.0,
+            },
+            "w13": {
+                "aicompute": 30.0,
+                "aisecurity": 12.0,
+                "semismemory": 80.0,
+                "spacesatellites": 40.0,
+            },
+        }
+        return {"nodes": data[st], "hash": f"fake-{st}"}
+
+    monkeypatch.setattr("tools.v2_momentum._fetch_theme_perf", fake_fetch_theme_perf)
+    r = _json_call(tools["momentum_theme_scan"], level="all", limit=10, sort_by="score")
+    assert r["success"] is True
+    assert r["historical_support"] is False
+    assert any(item["name"] == "Artificial Intelligence" for item in r["items"])
+    assert any(item["name"] == "Space Satellites" for item in r["items"])
+
+
+def test_theme_scan_invalid_level():
+    tools = _make_tools()
+    r = _json_call(tools["momentum_theme_scan"], level="industry")
+    assert "error" in r
+    assert "valid_level_options" in r
 
 
 def test_stock_scan_success(monkeypatch):
@@ -90,4 +166,3 @@ def test_stock_scan_requires_exactly_one_group_filter():
     tools = _make_tools()
     r = _json_call(tools["momentum_stock_scan"], industry="X", sector="Y")
     assert "error" in r
-

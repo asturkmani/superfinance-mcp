@@ -217,7 +217,30 @@ momentum_group_scan(group="Industry", limit=15, sort_by="score")
 momentum_group_scan(group="Sector", limit=11, sort_by="perf_month")
 ```
 
-### 10. momentum_stock_scan — Finviz stock leaders within group
+### 10. momentum_theme_scan — Finviz theme-map momentum rank
+
+**momentum_theme_scan(level, ...)**: Rank Finviz theme-map momentum for top-level themes and subthemes.
+
+Finviz returns current/live theme-map performance only. Store daily snapshots if historical backtests are needed.
+
+Select-style options:
+- **level**: `"top"`, `"subtheme"`, or `"all"`
+- **sort_by**: `"score"`, `"perf_week"`, `"perf_month"`, `"perf_quarter"`, `"acceleration"`
+
+Recommended defaults:
+- `level="all"`
+- `limit=30`
+- `sort_by="score"`
+- `descending=True`
+
+Examples:
+```
+momentum_theme_scan(level="all", limit=30, sort_by="score")
+momentum_theme_scan(level="top", limit=15, sort_by="perf_week")
+momentum_theme_scan(level="subtheme", limit=50, sort_by="acceleration")
+```
+
+### 11. momentum_stock_scan — Finviz stock leaders within group
 
 **momentum_stock_scan(industry|sector, ...)**: Find leading stocks in a target Finviz industry/sector.
 

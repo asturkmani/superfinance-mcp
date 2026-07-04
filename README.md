@@ -20,9 +20,10 @@ The server exposes the following tools through the Model Context Protocol:
 
 ### Momentum Scans (Finviz-backed)
 
-Two dedicated momentum tools are available:
+Three dedicated momentum tools are available:
 
 - `momentum_group_scan`: Rank `Industry` or `Sector` groups by momentum/performance.
+- `momentum_theme_scan`: Rank Finviz theme-map top-level themes and subthemes using 1W/1M/3M momentum.
 - `momentum_stock_scan`: Scan top stocks inside a chosen industry/sector with size/liquidity filters.
 
 Recommended baseline settings:
@@ -30,6 +31,11 @@ Recommended baseline settings:
 - Group scan defaults:
   - `group="Industry"`
   - `limit=15`
+  - `sort_by="score"`
+  - `descending=true`
+- Theme scan defaults:
+  - `level="all"`
+  - `limit=30`
   - `sort_by="score"`
   - `descending=true`
 - Stock scan defaults:
@@ -44,8 +50,12 @@ Select-style options:
 
 - `momentum_group_scan.group`: `Industry` | `Sector`
 - `momentum_group_scan.sort_by`: `score` | `perf_week` | `perf_month` | `perf_quarter` | `perf_half` | `perf_year`
+- `momentum_theme_scan.level`: `top` | `subtheme` | `all`
+- `momentum_theme_scan.sort_by`: `score` | `perf_week` | `perf_month` | `perf_quarter` | `acceleration`
 - `momentum_stock_scan.market_cap`: `all` | `large` | `mid` | `small` | `micro` | `nano`
 - `momentum_stock_scan.sort_by`: `score` | `perf_week` | `perf_month` | `perf_quarter` | `perf_half` | `perf_year`
+
+Finviz theme-map data appears to be current/live only. Use `momentum_theme_scan` daily and store snapshots if you need historical backtests.
 
 ### Stock Information
 
@@ -191,4 +201,3 @@ To integrate this server with Claude for Desktop:
 ## License
 
 MIT
-
